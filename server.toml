@@ -1,0 +1,9 @@
+ListenAddr="0.0.0.0"
+hopstart = 40100
+hopend = 40120
+subnet = "10.1.1.1/24"
+key = "ilovethebigbrother"
+peertimeout = 60
+mtu = 1500
+up =
+down =
