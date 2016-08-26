@@ -25,13 +25,12 @@ import (
 	"net"
 	"strings"
 	"github.com/FTwOoO/go-enc"
-	"crypto/cipher"
 )
 
 var cipher enc.BlockCrypt
 
 const (
-	HOP_FLG_PSH byte = 0x80 // port knocking and heartbeat
+	HOP_FLG_PING byte = 0x80 // port knocking and heartbeat
 	HOP_FLG_HSH byte = 0x40 // handshaking
 	HOP_FLG_FIN byte = 0x20 // finish session
 	HOP_FLG_MFR byte = 0x08 // more fragments
@@ -46,6 +45,7 @@ const (
 	HOP_PROTO_VERSION byte = 0x01 // protocol version
 )
 
+
 type hopPacketHeader struct {
 	Flag byte
 	Seq  uint32
@@ -58,8 +58,8 @@ func (p hopPacketHeader) String() string {
 	if (p.Flag ^ HOP_FLG_MFR == 0) || (p.Flag == 0) {
 		flag = append(flag, "DAT")
 	}
-	if p.Flag & HOP_FLG_PSH != 0 {
-		flag = append(flag, "PSH")
+	if p.Flag & HOP_FLG_PING != 0 {
+		flag = append(flag, "PING")
 	}
 	if p.Flag & HOP_FLG_HSH != 0 {
 		flag = append(flag, "HSH")

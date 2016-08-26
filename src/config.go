@@ -20,20 +20,21 @@ import (
 	"github.com/naoina/toml"
 	"os"
 	"io/ioutil"
+	"github.com/FTwOoO/go-logger"
 )
 
 
 // Server Config
 type CandyVPNServerConfig struct {
-	ListenAddr  string
-	HopStart    int
-	HopEnd      int
-	Subnet      string
-	MTU         int
-	Key         string
-	PeerTimeout int
-	Up          string
-	Down        string
+	ListenAddr  string `toml:"addr"`
+	PortStart   int    `toml:"port-start"`
+	PortEnd     int    `toml:"port-end"`
+	Subnet      string `toml:"subnet"`
+	MTU         int    `toml:"mtu"`
+	Key         string `toml:"key"`
+	PeerTimeout int    `toml:"peertimeout"`
+	LogFile     string `toml:"logfile"`
+	LogLevel    logger.LogLevel `toml:"loglevel"`
 }
 
 func NewCandyVPNServerConfig(path string) (c *CandyVPNServerConfig, err error) {
