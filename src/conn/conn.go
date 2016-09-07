@@ -15,21 +15,24 @@
  * Author: FTwOoO <booobooob@gmail.com>
  */
 
-package hop
+package conn
 
-import "net"
+import (
+	"net"
+	"errors"
+)
 
-type KCPListener struct {
 
+const (
+	PROTO_KCP = Protocol(1)
+	PROTO_OBFS4 = Protocol(2)
+)
+
+func Listen(proto Protocol, addr net.Addr) (*net.Listener, error) {
+	switch proto {
+	case PROTO_KCP:
+		return &KCPListener{}, nil
+	default:
+		return nil, errors.New("UNKOWN PROTOCOL!")
+	}
 }
-
-
-// Accept waits for and returns the next connection to the listener.
-func (conn *KCPListener)Accept() (net.Conn, error)
-
-// Close closes the listener.
-// Any blocked Accept operations will be unblocked and return errors.
-func (conn *KCPListener) Close() error
-
-// Addr returns the listener's network address.
-func (conn *KCPListener) Addr() net.Addr

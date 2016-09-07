@@ -22,128 +22,247 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"net"
 	"strings"
-	"github.com/FTwOoO/go-enc"
+	"net"
 )
 
-var cipher enc.BlockCrypt
+type Protocol uint32
 
 const (
-	HOP_FLG_PING byte = 0x80 // port knocking and heartbeat
-	HOP_FLG_HSH byte = 0x40 // handshaking
-	HOP_FLG_FIN byte = 0x20 // finish session
-	HOP_FLG_MFR byte = 0x08 // more fragments
-	HOP_FLG_ACK byte = 0x04 // acknowledge
-	HOP_FLG_DAT byte = 0x00 // acknowledge
+	HOP_ACK_MARK byte = 0x01 // acknowledge
+	HOP_PROTO_VERSION byte = 0x01 // protocol version
+
+
+	HOP_FLG_PING Protocol = 0x80
+	HOP_FLG_PING_ACK Protocol = HOP_ACK_MARK | HOP_FLG_PING
+
+	HOP_FLG_HSH Protocol = 0x40
+	HOP_FLG_HSH_ACK Protocol = HOP_ACK_MARK | HOP_FLG_HSH
+
+	HOP_FLG_FIN Protocol = 0x20
+	HOP_FLG_FIN_ACK Protocol = HOP_ACK_MARK | HOP_FLG_FIN
+
+	HOP_FLG_DAT Protocol = 0x10
+	HOP_FLG_DAT_ACK Protocol = HOP_ACK_MARK | HOP_FLG_DAT
 
 	HOP_STAT_INIT int32 = iota // initing
 	HOP_STAT_HANDSHAKE              // handeshaking
 	HOP_STAT_WORKING                // working
 	HOP_STAT_FIN                    // finishing
-
-	HOP_PROTO_VERSION byte = 0x01 // protocol version
 )
 
-
-type hopPacketHeader struct {
-	Flag byte
-	Seq  uint32
-	Sid  uint32 //会话ID
-	Dlen uint16 //发送前要设置
+type AppPacket interface {
+	Pack() []byte
+	Unpack(buf *bytes.Buffer) error
+	String() string
+	Protocol() Protocol
 }
 
-func (p hopPacketHeader) String() string {
+type HandshakePacket struct{}
+
+func (p *HandshakePacket) Unpack(buf *bytes.Buffer) error {
+	return nil
+}
+
+func (p *HandshakePacket) Protocol() Protocol {
+	return HOP_FLG_HSH
+}
+
+func (p *HandshakePacket) String() string {
+	return "HandshakePacket"
+}
+
+type HandshakeAckPacket struct {
+	Ip       net.IP
+	MaskSize int
+}
+
+func (p *HandshakeAckPacket) Pack() []byte {
+	buf := bytes.NewBuffer(make([]byte, 0, len(p)))
+	binary.Write(buf, binary.BigEndian, p)
+	return buf.Bytes()
+}
+
+func (p *HandshakeAckPacket) Protocol() Protocol {
+	return HOP_FLG_HSH_ACK
+}
+
+func (p *HandshakeAckPacket) String() string {
+	return fmt.Sprintf("IP:%v, MaskSize:%d", p.Ip.String(), p.MaskSize)
+}
+
+type PingPacket struct {
+}
+
+func (p *PingPacket) Unpack(buf *bytes.Buffer) error {
+	return nil
+}
+
+func (p *PingPacket) Protocol() Protocol {
+	return HOP_FLG_PING
+}
+
+func (p *PingPacket) String() string {
+	return "PingPacket"
+}
+
+type PingAckPacket struct {
+}
+
+func (p *PingAckPacket) Pack() []byte {
+	return []byte{}
+}
+
+func (p *PingAckPacket) Protocol() Protocol {
+	return HOP_FLG_PING_ACK
+}
+
+type FinPacket struct {
+}
+
+func (p *FinPacket) Unpack(buf *bytes.Buffer) error {
+	return nil
+}
+
+func (p *FinPacket) Pack() []byte {
+	return []byte{}
+}
+
+func (p *FinPacket) Protocol() Protocol {
+	return HOP_FLG_FIN
+}
+
+func (p *FinPacket) String() string {
+	return "FinPacket"
+}
+
+type FinAckPacket struct {
+}
+
+func (p *FinAckPacket) Unpack(buf *bytes.Buffer) error {
+	return nil
+}
+
+func (p *FinAckPacket) Pack() []byte {
+	return []byte{}
+}
+
+func (p *FinAckPacket) Protocol() Protocol {
+	return HOP_FLG_FIN_ACK
+}
+
+func (p *FinAckPacket) String() string {
+	return "FinAckPacket"
+}
+
+type DataPacket struct {
+	Dlen    uint16
+	Payload []byte
+}
+
+func (p *DataPacket) Unpack(buf *bytes.Buffer) error {
+	return nil
+}
+
+func (p *DataPacket) Pack() []byte {
+	p.Dlen = uint16(len(p.Payload))
+
+	buf := bytes.NewBuffer(make([]byte, 0, len(4 + p.Dlen)))
+	binary.Write(buf, binary.BigEndian, p.Dlen)
+	binary.Write(buf, binary.BigEndian, p.Payload)
+	return buf.Bytes()
+}
+
+func (p *DataPacket) Protocol() Protocol {
+	return HOP_FLG_DAT
+}
+
+func (p *DataPacket) String() string {
+	return "DataPacket"
+}
+
+type HopPacket struct {
+	Proto      uint32
+	Seq        uint32
+	Dlen       uint16 //发送前要设置
+	DataPacket AppPacket
+}
+
+func (p *HopPacket) Pack() []byte {
+	Payload := p.DataPacket.Pack()
+	p.Dlen = uint16(len(Payload))
+
+	buf := bytes.NewBuffer(make([]byte, 0, len(16 + p.Dlen)))
+	binary.Write(buf, binary.BigEndian, p.Proto)
+	binary.Write(buf, binary.BigEndian, p.Seq)
+	binary.Write(buf, binary.BigEndian, p.Dlen)
+	binary.Write(buf, binary.BigEndian, Payload)
+
+	b := buf.Bytes()
+	return b
+}
+
+func (p *HopPacket) String() string {
 	flag := make([]string, 0, 8)
-	if (p.Flag ^ HOP_FLG_MFR == 0) || (p.Flag == 0) {
+	if (p.Proto == 0) {
 		flag = append(flag, "DAT")
 	}
-	if p.Flag & HOP_FLG_PING != 0 {
+	if p.Proto & HOP_FLG_PING != 0 {
 		flag = append(flag, "PING")
 	}
-	if p.Flag & HOP_FLG_HSH != 0 {
+	if p.Proto & HOP_FLG_HSH != 0 {
 		flag = append(flag, "HSH")
 	}
-	if p.Flag & HOP_FLG_FIN != 0 {
+	if p.Proto & HOP_FLG_FIN != 0 {
 		flag = append(flag, "FIN")
 	}
-	if p.Flag & HOP_FLG_ACK != 0 {
+	if p.Proto & HOP_ACK_MARK != 0 {
 		flag = append(flag, "ACK")
-	}
-	if p.Flag & HOP_FLG_MFR != 0 {
-		flag = append(flag, "MFR")
 	}
 
 	sflag := strings.Join(flag, " | ")
 	return fmt.Sprintf(
-		"{Flag: %s, Seq: %d, Dlen: %d}",
-		sflag, p.Seq, p.Dlen,
+		"{Flag: %s, Seq: %d, Dlen: %d, Payload: %s}",
+		sflag, p.Seq, p.Dlen, p.DataPacket.String(),
 	)
 }
 
-type HopPacket struct {
-	hopPacketHeader
-	Payload []byte
-	Noise   []byte
+func NewHopPacket(seq uint, p *AppPacket) *HopPacket {
+	hp := new(HopPacket)
+	hp.Seq = seq//peer.NextSeq()
+	hp.DataPacket = *p
+	hp.Proto = p.Protocol()
+
+	return hp
 }
 
-func (p *HopPacket) Pack() []byte {
-	p.Dlen = uint16(len(p.Payload))
-
-	buf := bytes.NewBuffer(make([]byte, 0, p.bufSize()))
-	binary.Write(buf, binary.BigEndian, p.hopPacketHeader)
-	buf.Write(p.Payload)
-	buf.Write(p.Noise)
-
-	b := buf.Bytes()
-	bout := make([]byte, len(b))
-	cipher.Encrypt(bout, b)
-
-	return bout
-}
-
-func (p *HopPacket) bufSize() int {
-	return 16 + len(p.Payload) + len(p.Noise)
-}
-
-func (p *HopPacket) setSid(sid [4]byte) {
-	p.Sid = binary.BigEndian.Uint32(sid[:])
-}
-
-func (p *HopPacket) String() string {
-	return fmt.Sprintf(
-		"{%v, Payload: %v, Noise: %v}",
-		p.hopPacketHeader, p.Payload, p.Noise,
-	)
-}
-
-func unpackHopPacket(b []byte) (*HopPacket, error) {
+func unpackHopPacket(b []byte) (p *HopPacket, remainBytes uint, err error) {
 	frame := make([]byte, len(b))
-	cipher.Decrypt(frame, b)
+	copy(frame, b)
 
 	buf := bytes.NewBuffer(frame)
-	p := new(HopPacket)
-	binary.Read(buf, binary.BigEndian, &p.hopPacketHeader)
-	p.Payload = make([]byte, p.Dlen)
-	buf.Read(p.Payload)
-	return p, nil
-}
+	p = new(HopPacket)
+	if err = binary.Read(buf, binary.BigEndian, &p.Proto); err != nil {
+		return
+	}
 
-func udpAddrHash(a *net.UDPAddr) [6]byte {
-	var b [6]byte
-	copy(b[:4], []byte(a.IP)[:4])
-	p := uint16(a.Port)
-	b[4] = byte((p >> 8) & 0xFF)
-	b[5] = byte(p & 0xFF)
-	return b
-}
+	if err = binary.Read(buf, binary.BigEndian, &p.Seq); err != nil {
+		return
+	}
 
-type hUDPAddr struct {
-	u    *net.UDPAddr
-	hash [6]byte
-}
+	if err = binary.Read(buf, binary.BigEndian, &p.Dlen); err != nil {
+		return
+	}
 
-func newhUDPAddr(a *net.UDPAddr) *hUDPAddr {
-	return &hUDPAddr{a, udpAddrHash(a)}
-}
+	var datapacket AppPacket
+	if p.Proto == HOP_FLG_HSH {
+		datapacket = new(HandshakePacket)
+	}
 
+	if err = datapacket.Unpack(buf); err != nil {
+		return
+	}
+
+	remainBytes = len(buf)
+	return p, remainBytes, nil
+}

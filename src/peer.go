@@ -58,7 +58,7 @@ func (peer *VPNPeer) RandomConn() *net.Conn {
 	return peer.connections[index]
 }
 
-func (peer *VPNPeer) Seq() uint32 {
+func (peer *VPNPeer) NextSeq() uint32 {
 	return atomic.AddUint32(&peer.seq, 1)
 }
 

@@ -15,28 +15,21 @@
  * Author: FTwOoO <booobooob@gmail.com>
  */
 
-package hop
+package conn
 
 import "net"
 
-type RawPacket struct {
-	conn *net.Conn
-	data []byte
+type KCPListener struct {
+
 }
 
-func (p *RawPacket) Send() error {
-	len = len(p.data)
 
-	for {
-		if len <= 0 {
-			break
-		}
+// Accept waits for and returns the next connection to the listener.
+func (conn *KCPListener)Accept() (net.Conn, error)
 
-		n, err := p.conn.Write(data)
-		if err != nil {
-			return err
-		}
+// Close closes the listener.
+// Any blocked Accept operations will be unblocked and return errors.
+func (conn *KCPListener) Close() error
 
-		len -= n
-	}
-}
+// Addr returns the listener's network address.
+func (conn *KCPListener) Addr() net.Addr

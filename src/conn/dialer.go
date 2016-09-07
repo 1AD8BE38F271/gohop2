@@ -15,25 +15,38 @@
  * Author: FTwOoO <booobooob@gmail.com>
  */
 
-package hop
+package conn
 
 import (
 	"net"
-	"errors"
+	"net/url"
+	"golang.org/x/net/proxy"
 )
 
-type Protocol uint
+type ConnectionDialer struct {
+	Url    *url.URL
+	dialer proxy.Dialer
+}
 
-const (
-	PROTO_KCP = Protocol(1)
-	PROTO_OBFS4 = Protocol(2)
-)
+func (p *ConnectionDialer) Dial(network, addr string) (net.Conn, error) {
+	return p.dialer.Dial(network, addr)
+}
 
-func Listen(proto Protocol, addr net.Addr) (*net.Listener, error) {
-	switch proto {
-	case PROTO_KCP:
-		return &KCPListener{}, nil
-	default:
-		return nil, errors.New("UNKOWN PROTOCOL!")
+func FromURL(protoUrl string) (*ConnectionDialer, error) {
+	u, err := url.Parse(protoUrl)
+	if err != nil {
+		return nil, err
 	}
+
+	dailer, err := proxy.FromURL(u, proxy.Direct)
+	if err != nil {
+		return nil, err
+	}
+
+	proxy := &ConnectionDialer{
+		Url:    u,
+		dialer: dailer,
+	}
+
+	return proxy, nil
 }
