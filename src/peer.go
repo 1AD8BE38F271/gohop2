@@ -30,18 +30,15 @@ type VPNPeer struct {
 	seq          uint32
 	state        int32
 	hsDone       chan struct{}
-
-	recvBuffer   *hopPacketBuffer
 	lastSeenTime time.Time
 	connections  []*net.Conn
 }
 
-func NewVPNPeer(id uint32, srv *CandyVPNServer) *VPNPeer {
+func NewVPNPeer(id uint32) *VPNPeer {
 	hp := new(VPNPeer)
 	hp.sid = id
 	hp.state = HOP_STAT_INIT
 	hp.seq = 0
-	hp.recvBuffer = newHopPacketBuffer(srv.toIface)
 	hp.lastSeenTime = time.Now()
 	hp.connections = new([]*net.Conn)
 	hp.hsDone = make(chan struct{})
@@ -80,13 +77,13 @@ func NewVPNPeers(subnet *net.IPNet, timeout time.Duration) (vs *VPNPeers) {
 	return
 }
 
-func (vs *VPNPeers) NewPeer(id uint32, srv *CandyVPNServer) (ip net.IP, err error) {
+func (vs *VPNPeers) NewPeer(id uint32) (ip net.IP, err error) {
 	ipnet, err := vs.ippool.Next()
 	if err != nil {
 		return
 	}
 
-	peer := NewVPNPeer(id, srv)
+	peer := NewVPNPeer(id)
 	peer.ip = ipnet.IP
 	vs.peersByIP[peer.ip] = peer
 	vs.PeersByID[id] = peer

@@ -22,13 +22,14 @@ import (
 	"errors"
 )
 
+type TransProtocol uint32
 
 const (
-	PROTO_KCP = Protocol(1)
-	PROTO_OBFS4 = Protocol(2)
+	PROTO_KCP = TransProtocol(1)
+	PROTO_OBFS4 = TransProtocol(2)
 )
 
-func Listen(proto Protocol, addr net.Addr) (*net.Listener, error) {
+func Listen(proto TransProtocol, addr net.Addr) (*net.Listener, error) {
 	switch proto {
 	case PROTO_KCP:
 		return &KCPListener{}, nil

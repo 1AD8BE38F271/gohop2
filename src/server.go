@@ -81,7 +81,7 @@ func NewServer(cfg CandyVPNServerConfig) (err error) {
 	hopServer := new(CandyVPNServer)
 	hopServer.fromNet = make(chan *RawPacket, BUF_SIZE)
 	hopServer.fromIface = make(chan []byte, BUF_SIZE)
-	hopServer.toIface = make(chan *HopPacket, BUF_SIZE)
+	hopServer.toIface = make(chan *HopPacket, BUF_SIZE * 4)
 	hopServer.peers = make(map[uint64]*VPNPeer)
 	hopServer.cfg = cfg
 	hopServer.toNet = make(chan *RawPacket, BUF_SIZE)
@@ -155,7 +155,7 @@ func (srv *CandyVPNServer) handleInterface() {
 	}
 }
 
-func (srv *CandyVPNServer) listen(protocol conn.Protocol, addr string) {
+func (srv *CandyVPNServer) listen(protocol conn.TransProtocol, addr string) {
 	l, err := conn.Listen(protocol, addr)
 	if err != nil {
 		log.Errorf("Failed to listen on %s: %s", addr, err.Error())
@@ -230,7 +230,7 @@ func (srv *CandyVPNServer) forwardFrames() {
 					peer, ok := srv.peers.PeersByID[hPack.Sid]
 					if !ok {
 						if hPack.Proto == HOP_FLG_HSH {
-							_, err := srv.peers.NewPeer(hPack.Sid, srv)
+							_, err := srv.peers.NewPeer(hPack.Sid)
 							if err != nil {
 								log.Errorf("Cant alloc IP from pool %v", err)
 							}
@@ -302,7 +302,7 @@ func (srv *CandyVPNServer) handleHandshakeAck(peer *VPNPeer, hp *HopPacket) {
 
 func (srv *CandyVPNServer) handleDataPacket(peer *VPNPeer, hp *HopPacket) {
 	if peer.state == HOP_STAT_WORKING {
-		peer.recvBuffer.Push(hp)
+		srv.toIface <- hp
 	}
 }
 
