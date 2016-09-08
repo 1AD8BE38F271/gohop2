@@ -102,9 +102,7 @@ func (p *PingPacket) Protocol() Protocol {
 	return HOP_FLG_PING
 }
 
-func (p *PingPacket) String() string {
-	return "PingPacket"
-}
+
 
 type PingAckPacket struct {
 }
@@ -132,9 +130,7 @@ func (p *FinPacket) Protocol() Protocol {
 	return HOP_FLG_FIN
 }
 
-func (p *FinPacket) String() string {
-	return "FinPacket"
-}
+
 
 type FinAckPacket struct {
 }
@@ -151,9 +147,7 @@ func (p *FinAckPacket) Protocol() Protocol {
 	return HOP_FLG_FIN_ACK
 }
 
-func (p *FinAckPacket) String() string {
-	return "FinAckPacket"
-}
+
 
 type DataPacket struct {
 	Dlen    uint16
@@ -177,11 +171,10 @@ func (p *DataPacket) Protocol() Protocol {
 	return HOP_FLG_DAT
 }
 
-func (p *DataPacket) String() string {
-	return "DataPacket"
-}
+
 
 type HopPacket struct {
+	Sid        uint32
 	Proto      uint32
 	Seq        uint32
 	Dlen       uint16 //发送前要设置
@@ -193,6 +186,7 @@ func (p *HopPacket) Pack() []byte {
 	p.Dlen = uint16(len(Payload))
 
 	buf := bytes.NewBuffer(make([]byte, 0, len(16 + p.Dlen)))
+	binary.Write(buf, binary.BigEndian, p.Sid)
 	binary.Write(buf, binary.BigEndian, p.Proto)
 	binary.Write(buf, binary.BigEndian, p.Seq)
 	binary.Write(buf, binary.BigEndian, p.Dlen)
@@ -227,12 +221,12 @@ func (p *HopPacket) String() string {
 	)
 }
 
-func NewHopPacket(seq uint, p *AppPacket) *HopPacket {
+func NewHopPacket(peer *VPNPeer, p *AppPacket) *HopPacket {
 	hp := new(HopPacket)
-	hp.Seq = seq//peer.NextSeq()
-	hp.DataPacket = *p
+	hp.Sid = peer.Id
+	hp.Seq = peer.NextSeq()
 	hp.Proto = p.Protocol()
-
+	hp.DataPacket = *p
 	return hp
 }
 
@@ -242,6 +236,11 @@ func unpackHopPacket(b []byte) (p *HopPacket, remainBytes uint, err error) {
 
 	buf := bytes.NewBuffer(frame)
 	p = new(HopPacket)
+
+	if err = binary.Read(buf, binary.BigEndian, &p.Sid); err != nil {
+		return
+	}
+
 	if err = binary.Read(buf, binary.BigEndian, &p.Proto); err != nil {
 		return
 	}

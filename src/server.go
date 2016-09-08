@@ -23,7 +23,6 @@ import (
 	"net"
 	"os"
 	"os/signal"
-	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -41,29 +40,24 @@ const (
 var log logger.Logger
 
 type CandyVPNServer struct {
-	// config
 	cfg       CandyVPNServerConfig
-
 	peers     *VPNPeers
-
-	// interface
 	iface     *water.Interface
 
-	// channel to put in packets read from udpsocket
+	//读取Tun并转发:
+	//[Server Tun] —> [fromIface buf] —> [toNet buf]—>udp—> [Client]
+
+	//接收客户端节点的Data类型协议包并转发:
+	//[Client] —>udp—> [fromNet buf] —> [toIface buf] —> [Server Tun]
+
+	//接收客户端节控制类型协议包并回复:
+	//[Client] —>udp—> [fromNet buf] —>udp—> [Client]
+
 	fromNet   chan *RawPacket
-
-	// channel to put packets to send through udpsocket
 	toNet     chan *RawPacket
-
-	// channel to put frames read from tun/tap device
 	fromIface chan []byte
-
-	// channel to put frames to send to tun/tap device
 	toIface   chan *HopPacket
-
 	pktHandle map[byte](func(*VPNPeer, *HopPacket))
-
-	_lock     sync.RWMutex
 }
 
 func NewServer(cfg CandyVPNServerConfig) (err error) {
@@ -106,17 +100,6 @@ func NewServer(cfg CandyVPNServerConfig) (err error) {
 	}
 
 	hopServer.peers = NewVPNPeers(subnet, hopServer.cfg.PeerTimeout)
-
-
-	//读取Tun并转发:
-	//[Server Tun] —> [fromIface buf] —> [toNet buf]—>udp—> [Client]
-
-	//接收客户端节点的Data类型协议包并转发:
-	//[Client] —>udp—> [fromNet buf] —> [toIface buf] —> [Server Tun]
-
-	//接收客户端节控制类型协议包并回复:
-	//[Client] —>udp—> [fromNet buf] —>udp—> [Client]
-
 
 	for port := cfg.PortStart; port <= cfg.PortEnd; port++ {
 		go hopServer.listen(conn.PROTO_KCP, fmt.Sprintf("%s:%d", cfg.ListenAddr, port))
@@ -215,8 +198,8 @@ func (srv *CandyVPNServer) forwardFrames() {
 			mkey, _ := binary.Uvarint(dest)
 
 			log.Debugf("ip dest: %v", dest)
-			if hpeer, found := srv.peers.peersByIP[mkey]; found {
-				srv.SendToClient(hpeer, &DataPacket{Payload:pack})
+			if peer, found := srv.peers.PeersByIp[mkey]; found {
+				srv.SendToClient(peer, &DataPacket{Payload:pack})
 			} else {
 				log.Warningf("client peer with key %d not found", mkey)
 			}
@@ -227,21 +210,20 @@ func (srv *CandyVPNServer) forwardFrames() {
 				log.Error(err.Error())
 			} else {
 				if handle_func, ok := srv.pktHandle[hPack.Proto]; ok {
-					peer, ok := srv.peers.PeersByID[hPack.Sid]
-					if !ok {
+					peer, found := srv.peers.PeersByID[hPack.Sid]
+
+					if !found {
 						if hPack.Proto == HOP_FLG_HSH {
-							_, err := srv.peers.NewPeer(hPack.Sid)
+							peer, err = srv.peers.NewPeer(packet.conn)
 							if err != nil {
 								log.Errorf("Cant alloc IP from pool %v", err)
+								continue
 							}
-
-							peer, _ = srv.peers.PeersByID[hPack.Sid]
 						}
-
 					}
 
-					if peer != nil {
-						peer.lastSeenTime = time.Now()
+					if found {
+						peer.LastSeenTime = time.Now()
 						if handle_func != nil {
 							handle_func(peer, hPack)
 						}
@@ -256,7 +238,7 @@ func (srv *CandyVPNServer) forwardFrames() {
 }
 
 func (srv *CandyVPNServer) SendToClient(peer *VPNPeer, p *AppPacket) {
-	hp := NewHopPacket(peer.NextSeq(), p)
+	hp := NewHopPacket(peer, p)
 	log.Debugf("peer: %v", peer)
 	upacket := &RawPacket{data:hp.Pack(), conn:peer.RandomConn()}
 	srv.toNet <- upacket
@@ -269,12 +251,12 @@ func (srv *CandyVPNServer) handlePing(hpeer *VPNPeer, hp *HopPacket) {
 }
 
 func (srv *CandyVPNServer) handleHandshake(peer *VPNPeer, hp *HopPacket) {
-	log.Debugf("assign address %s", peer.ip)
+	log.Debugf("assign address %s", peer.Ip)
 	atomic.StoreInt32(&peer.state, HOP_STAT_HANDSHAKE)
 
 	srv.SendToClient(peer,
 		HandshakeAckPacket{
-			Ip:peer.ip,
+			Ip:peer.Ip,
 			MaskSize:srv.peers.ippool.subnet.Mask.Size()[0]},
 	)
 	go func() {
@@ -284,18 +266,18 @@ func (srv *CandyVPNServer) handleHandshake(peer *VPNPeer, hp *HopPacket) {
 			return
 		case <-time.After(6 * time.Second):
 			srv.SendToClient(peer, new(FinPacket))
-			srv.peers.DeletePeer(peer.sid)
+			srv.peers.DeletePeer(peer)
 		}
 	}()
 }
 
 func (srv *CandyVPNServer) handleHandshakeAck(peer *VPNPeer, hp *HopPacket) {
-	log.Infof("Client %d Connected", peer.ip)
+	log.Infof("Client %d Connected", peer.Ip)
 	if ok := atomic.CompareAndSwapInt32(&peer.state, HOP_STAT_HANDSHAKE, HOP_STAT_WORKING); ok {
 		peer.hsDone <- struct{}{}
 	} else {
-		log.Warningf("Invalid peer state: %v", peer.ip)
-		srv.peers.DeletePeer(peer.sid)
+		log.Warningf("Invalid peer state: %v", peer.Ip)
+		srv.peers.DeletePeer(peer)
 		srv.SendToClient(peer, new(FinPacket))
 	}
 }
@@ -307,8 +289,8 @@ func (srv *CandyVPNServer) handleDataPacket(peer *VPNPeer, hp *HopPacket) {
 }
 
 func (srv *CandyVPNServer) handleFinish(peer *VPNPeer, hp *HopPacket) {
-	log.Infof("Releasing client sid: %d", peer.sid)
-	srv.peers.DeletePeer(peer.sid)
+	log.Infof("Releasing client ip: %d", peer.Ip)
+	srv.peers.DeletePeer(peer)
 	srv.SendToClient(peer, new(FinAckPacket))
 }
 
@@ -318,7 +300,7 @@ func (srv *CandyVPNServer) cleanUp() {
 	signal.Notify(c, syscall.SIGINT, syscall.SIGTERM, syscall.SIGKILL, syscall.SIGQUIT)
 	<-c
 
-	for _, peer := range srv.peers.PeersByID {
+	for _, peer := range srv.peers.PeersByIp {
 		srv.SendToClient(peer, new(FinAckPacket))
 	}
 	os.Exit(0)
@@ -330,8 +312,8 @@ func (srv *CandyVPNServer) peerTimeoutWatcher() {
 	for {
 		select {
 		case <-time.After(timeout):
-			for sid, peer := range srv.peers.PeersByID {
-				log.Debugf("IP: %v, sid: %v", peer.ip, sid)
+			for _, peer := range srv.peers.PeersByIp {
+				log.Debugf("IP: %v", peer.Ip)
 				srv.SendToClient(peer, new(PingPacket))
 			}
 		case peer := <-srv.peers.PeerTimeout:
