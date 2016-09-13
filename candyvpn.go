@@ -15,28 +15,30 @@
  * Author: FTwOoO <booobooob@gmail.com>
  */
 
-package hop
 
-import "net"
+package main
 
-type RawPacket struct {
-	conn *net.Conn
-	data []byte
-}
+import (
+	"flag"
+	"./vpn"
+)
 
-func (p *RawPacket) Send() error {
-	len = len(p.data)
+var cfgFile string
 
-	for {
-		if len <= 0 {
-			break
-		}
+func main() {
+	flag.StringVar(&cfgFile, "config", "server.toml", "configfile")
+	flag.Parse()
 
-		n, err := p.conn.Write(data)
-		if err != nil {
-			return err
-		}
-
-		len -= n
+	if cfgFile == "" {
+		cfgFile = flag.Arg(0)
 	}
+
+	config, err := vpn.NewCandyVPNServerConfig(cfgFile)
+	if err != nil {
+		panic(err)
+	}
+	vpn.NewServer(config)
 }
+
+
+

@@ -15,7 +15,7 @@
  * Author: FTwOoO <booobooob@gmail.com>
  */
 
-package hop
+package vpn
 
 import (
 	"time"
@@ -31,7 +31,7 @@ type VPNPeer struct {
 	state        int32
 	hsDone       chan struct{}
 	LastSeenTime time.Time
-	Connections  []*net.Conn
+	Connections  []net.Conn
 }
 
 func NewVPNPeer(id uint32, ip net.IP) *VPNPeer {
@@ -41,17 +41,17 @@ func NewVPNPeer(id uint32, ip net.IP) *VPNPeer {
 	hp.Id = id
 	hp.Ip = ip
 	hp.LastSeenTime = time.Now()
-	hp.Connections = new([]*net.Conn)
+	hp.Connections = make([]net.Conn, 0)
 	hp.hsDone = make(chan struct{})
 
 	return hp
 }
 
-func (peer *VPNPeer) AddConnection(conn *net.Conn) {
+func (peer *VPNPeer) AddConnection(conn net.Conn) {
 	append(peer.Connections, conn)
 }
 
-func (peer *VPNPeer) RandomConn() *net.Conn {
+func (peer *VPNPeer) RandomConn() net.Conn {
 	index := rand.Intn(len(peer.Connections))
 	return peer.Connections[index]
 }
@@ -69,14 +69,14 @@ type VPNPeers struct {
 
 func NewVPNPeers(subnet *net.IPNet, timeout time.Duration) (vs *VPNPeers) {
 	vs = new(VPNPeers)
-	vs.ippool = IPPool{subnet:subnet}
+	vs.ippool = &IPPool{subnet:subnet}
 	vs.PeersByIp = map[net.IP]*VPNPeer{}
-	vs.PeerTimeout = new(chan *VPNPeer)
+	vs.PeerTimeout = make(chan *VPNPeer)
 	go vs.checkTimeout(timeout)
 	return
 }
 
-func (vs *VPNPeers) NewPeer(id uint32, conn *net.Conn) (peer *VPNPeer, err error) {
+func (vs *VPNPeers) NewPeer(id uint32, conn net.Conn) (peer *VPNPeer, err error) {
 	ipnet, err := vs.ippool.Next()
 	if err != nil {
 		return
@@ -89,7 +89,7 @@ func (vs *VPNPeers) NewPeer(id uint32, conn *net.Conn) (peer *VPNPeer, err error
 	return
 }
 
-func (vs *VPNPeers) AddConnection(conn *net.Conn, peer *VPNPeer) {
+func (vs *VPNPeers) AddConnection(conn net.Conn, peer *VPNPeer) {
 	if _, ok := vs.PeersByIp[peer.Ip]; ok {
 		peer.AddConnection(conn)
 	}

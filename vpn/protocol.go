@@ -16,7 +16,7 @@
  */
 
 
-package hop
+package vpn
 
 import (
 	"bytes"
@@ -29,8 +29,8 @@ import (
 type Protocol uint32
 
 const (
-	HOP_ACK_MARK byte = 0x01 // acknowledge
-	HOP_PROTO_VERSION byte = 0x01 // protocol version
+	HOP_ACK_MARK Protocol = 0x01 // acknowledge
+	HOP_PROTO_VERSION Protocol = 0x01 // protocol version
 
 
 	HOP_FLG_PING Protocol = 0x80
@@ -178,11 +178,11 @@ type HopPacket struct {
 	Proto      uint32
 	Seq        uint32
 	Dlen       uint16 //发送前要设置
-	DataPacket AppPacket
+	AppPacket
 }
 
 func (p *HopPacket) Pack() []byte {
-	Payload := p.DataPacket.Pack()
+	Payload := p.AppPacket.Pack()
 	p.Dlen = uint16(len(Payload))
 
 	buf := bytes.NewBuffer(make([]byte, 0, len(16 + p.Dlen)))
@@ -217,7 +217,7 @@ func (p *HopPacket) String() string {
 	sflag := strings.Join(flag, " | ")
 	return fmt.Sprintf(
 		"{Flag: %s, Seq: %d, Dlen: %d, Payload: %s}",
-		sflag, p.Seq, p.Dlen, p.DataPacket.String(),
+		sflag, p.Seq, p.Dlen, p.AppPacket.String(),
 	)
 }
 
@@ -226,7 +226,7 @@ func NewHopPacket(peer *VPNPeer, p *AppPacket) *HopPacket {
 	hp.Sid = peer.Id
 	hp.Seq = peer.NextSeq()
 	hp.Proto = p.Protocol()
-	hp.DataPacket = *p
+	hp.AppPacket = *p
 	return hp
 }
 

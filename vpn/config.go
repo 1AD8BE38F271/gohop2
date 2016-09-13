@@ -14,7 +14,7 @@
  *
  * Author: FTwOoO <booobooob@gmail.com>
  */
-package hop
+package vpn
 
 import (
 	"github.com/naoina/toml"

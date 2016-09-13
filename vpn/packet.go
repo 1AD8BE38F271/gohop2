@@ -15,38 +15,31 @@
  * Author: FTwOoO <booobooob@gmail.com>
  */
 
-package conn
+package vpn
 
-import (
-	"net"
-	"net/url"
-	"golang.org/x/net/proxy"
-)
+import "net"
 
-type ConnectionDialer struct {
-	Url    *url.URL
-	dialer proxy.Dialer
+type RawPacket struct {
+	conn net.Conn
+	data []byte
 }
 
-func (p *ConnectionDialer) Dial(network, addr string) (net.Conn, error) {
-	return p.dialer.Dial(network, addr)
+func (p *RawPacket) Send() error {
+	num := len(p.data)
+
+	for {
+		if num <= 0 {
+			break
+		}
+
+		n, err := p.conn.Write(p.data)
+		if err != nil {
+			return err
+		}
+
+		num -= n
+	}
+
+	return nil
 }
 
-func FromURL(protoUrl string) (*ConnectionDialer, error) {
-	u, err := url.Parse(protoUrl)
-	if err != nil {
-		return nil, err
-	}
-
-	dailer, err := proxy.FromURL(u, proxy.Direct)
-	if err != nil {
-		return nil, err
-	}
-
-	proxy := &ConnectionDialer{
-		Url:    u,
-		dialer: dailer,
-	}
-
-	return proxy, nil
-}

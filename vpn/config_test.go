@@ -15,25 +15,20 @@
  * Author: FTwOoO <booobooob@gmail.com>
  */
 
-package conn
+package vpn
 
 import (
-	"net"
-	"errors"
+	"testing"
+	"fmt"
 )
 
-type TransProtocol uint32
+func TestNewConfig(t *testing.T) {
 
-const (
-	PROTO_KCP = TransProtocol(1)
-	PROTO_OBFS4 = TransProtocol(2)
-)
-
-func Listen(proto TransProtocol, addr net.Addr) (*net.Listener, error) {
-	switch proto {
-	case PROTO_KCP:
-		return &KCPListener{}, nil
-	default:
-		return nil, errors.New("UNKOWN PROTOCOL!")
+	config, err := NewCandyVPNServerConfig("../server.toml")
+	if err != nil {
+		t.Fatal(err)
 	}
+
+	fmt.Println(config)
+
 }
