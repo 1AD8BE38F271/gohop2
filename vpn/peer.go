@@ -48,7 +48,7 @@ func NewVPNPeer(id uint32, ip net.IP) *VPNPeer {
 }
 
 func (peer *VPNPeer) AddConnection(conn net.Conn) {
-	append(peer.Connections, conn)
+	peer.Connections = append(peer.Connections, conn)
 }
 
 func (peer *VPNPeer) RandomConn() net.Conn {
@@ -62,7 +62,7 @@ func (peer *VPNPeer) NextSeq() uint32 {
 
 type VPNPeers struct {
 	ippool      *IPPool
-	PeersByIp   map[net.IP]*VPNPeer
+	PeersByIp   map[string]*VPNPeer
 	PeerTimeout chan *VPNPeer
 	PeersByID   map[uint32]*VPNPeer
 }
@@ -70,7 +70,7 @@ type VPNPeers struct {
 func NewVPNPeers(subnet *net.IPNet, timeout time.Duration) (vs *VPNPeers) {
 	vs = new(VPNPeers)
 	vs.ippool = &IPPool{subnet:subnet}
-	vs.PeersByIp = map[net.IP]*VPNPeer{}
+	vs.PeersByIp = map[string]*VPNPeer{}
 	vs.PeerTimeout = make(chan *VPNPeer)
 	go vs.checkTimeout(timeout)
 	return
@@ -83,21 +83,21 @@ func (vs *VPNPeers) NewPeer(id uint32, conn net.Conn) (peer *VPNPeer, err error)
 	}
 
 	peer = NewVPNPeer(id, ipnet.IP)
-	vs.PeersByIp[peer.Ip] = peer
+	vs.PeersByIp[peer.Ip.String()] = peer
 	vs.PeersByID[id] = peer
 	vs.AddConnection(conn, peer)
 	return
 }
 
 func (vs *VPNPeers) AddConnection(conn net.Conn, peer *VPNPeer) {
-	if _, ok := vs.PeersByIp[peer.Ip]; ok {
+	if _, ok := vs.PeersByIp[peer.Ip.String()]; ok {
 		peer.AddConnection(conn)
 	}
 }
 
 func (vs *VPNPeers) DeletePeer(peer *VPNPeer) {
 	vs.ippool.Release(peer.Ip)
-	delete(vs.PeersByIp, peer.Ip)
+	delete(vs.PeersByIp, peer.Ip.String())
 	delete(vs.PeersByID, peer.Id)
 }
 

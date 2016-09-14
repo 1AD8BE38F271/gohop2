@@ -60,6 +60,11 @@ type AppPacket interface {
 
 type HandshakePacket struct{}
 
+func (p *HandshakePacket) Pack() []byte {
+	panic("Not implemented")
+	return []byte{}
+}
+
 func (p *HandshakePacket) Unpack(buf *bytes.Buffer) error {
 	return nil
 }
@@ -69,7 +74,7 @@ func (p *HandshakePacket) Protocol() Protocol {
 }
 
 func (p *HandshakePacket) String() string {
-	return "HandshakePacket"
+	return ""
 }
 
 type HandshakeAckPacket struct {
@@ -78,11 +83,14 @@ type HandshakeAckPacket struct {
 }
 
 func (p *HandshakeAckPacket) Pack() []byte {
-	buf := bytes.NewBuffer(make([]byte, 0, len(p)))
+	buf := bytes.NewBuffer(make([]byte, 0, binary.Size(p)))
 	binary.Write(buf, binary.BigEndian, p)
 	return buf.Bytes()
 }
 
+func (p *HandshakeAckPacket) Unpack(buf *bytes.Buffer) error {
+	return nil
+}
 func (p *HandshakeAckPacket) Protocol() Protocol {
 	return HOP_FLG_HSH_ACK
 }
@@ -94,12 +102,19 @@ func (p *HandshakeAckPacket) String() string {
 type PingPacket struct {
 }
 
+func (p *PingPacket) Pack() []byte {
+	return []byte{}
+}
 func (p *PingPacket) Unpack(buf *bytes.Buffer) error {
 	return nil
 }
 
 func (p *PingPacket) Protocol() Protocol {
 	return HOP_FLG_PING
+}
+
+func (p *PingPacket) String() string {
+	return ""
 }
 
 
@@ -111,9 +126,19 @@ func (p *PingAckPacket) Pack() []byte {
 	return []byte{}
 }
 
+func (p *PingAckPacket) Unpack(buf *bytes.Buffer) error {
+	return nil
+}
+
 func (p *PingAckPacket) Protocol() Protocol {
 	return HOP_FLG_PING_ACK
 }
+
+func (p *PingAckPacket) String() string {
+	return ""
+}
+
+
 
 type FinPacket struct {
 }
@@ -130,6 +155,9 @@ func (p *FinPacket) Protocol() Protocol {
 	return HOP_FLG_FIN
 }
 
+func (p *FinPacket) String() string {
+	return ""
+}
 
 
 type FinAckPacket struct {
@@ -147,7 +175,9 @@ func (p *FinAckPacket) Protocol() Protocol {
 	return HOP_FLG_FIN_ACK
 }
 
-
+func (p *FinAckPacket) String() string {
+	return ""
+}
 
 type DataPacket struct {
 	Dlen    uint16
@@ -161,7 +191,7 @@ func (p *DataPacket) Unpack(buf *bytes.Buffer) error {
 func (p *DataPacket) Pack() []byte {
 	p.Dlen = uint16(len(p.Payload))
 
-	buf := bytes.NewBuffer(make([]byte, 0, len(4 + p.Dlen)))
+	buf := bytes.NewBuffer(make([]byte, 0, 4 + p.Dlen))
 	binary.Write(buf, binary.BigEndian, p.Dlen)
 	binary.Write(buf, binary.BigEndian, p.Payload)
 	return buf.Bytes()
@@ -171,21 +201,23 @@ func (p *DataPacket) Protocol() Protocol {
 	return HOP_FLG_DAT
 }
 
-
+func (p *DataPacket) String() string {
+	return ""
+}
 
 type HopPacket struct {
-	Sid        uint32
-	Proto      uint32
-	Seq        uint32
-	Dlen       uint16 //发送前要设置
-	AppPacket
+	Sid    uint32
+	Proto  Protocol
+	Seq    uint32
+	Dlen   uint16 //发送前要设置
+	packet AppPacket
 }
 
 func (p *HopPacket) Pack() []byte {
-	Payload := p.AppPacket.Pack()
+	Payload := p.packet.Pack()
 	p.Dlen = uint16(len(Payload))
 
-	buf := bytes.NewBuffer(make([]byte, 0, len(16 + p.Dlen)))
+	buf := bytes.NewBuffer(make([]byte, 0, 16 + p.Dlen))
 	binary.Write(buf, binary.BigEndian, p.Sid)
 	binary.Write(buf, binary.BigEndian, p.Proto)
 	binary.Write(buf, binary.BigEndian, p.Seq)
@@ -217,17 +249,49 @@ func (p *HopPacket) String() string {
 	sflag := strings.Join(flag, " | ")
 	return fmt.Sprintf(
 		"{Flag: %s, Seq: %d, Dlen: %d, Payload: %s}",
-		sflag, p.Seq, p.Dlen, p.AppPacket.String(),
+		sflag, p.Seq, p.Dlen, p.packet.String(),
 	)
 }
 
-func NewHopPacket(peer *VPNPeer, p *AppPacket) *HopPacket {
+func NewHopPacket(peer *VPNPeer, p AppPacket) *HopPacket {
 	hp := new(HopPacket)
 	hp.Sid = peer.Id
 	hp.Seq = peer.NextSeq()
 	hp.Proto = p.Protocol()
-	hp.AppPacket = *p
+	hp.packet = p
 	return hp
+}
+
+type Stream struct {
+	Connection net.Conn
+	Trunks     chan []byte
+}
+
+func NewStream(c net.Conn) Stream {
+	s := Stream{Connection:c}
+	s.Trunks = make(chan []byte, BUF_SIZE)
+	return s
+}
+
+type PacketStreams struct {
+	Streams map[string]chan Stream
+}
+
+func NewPacketStreams() PacketStreams {
+	s := PacketStreams{}
+	s.Streams = map[string]chan Stream{}
+	return s
+}
+
+func (p *PacketStreams) Input(c net.Conn, data []byte) *Stream {
+	s, ok := p.Streams[c.RemoteAddr().String()]
+	if !ok {
+		p.Streams[c.RemoteAddr().String()] = NewStream(c)
+		s = p.Streams[c.RemoteAddr().String()]
+	}
+
+	s.Trunks <- data
+
 }
 
 func unpackHopPacket(b []byte) (p *HopPacket, remainBytes uint, err error) {
@@ -262,6 +326,6 @@ func unpackHopPacket(b []byte) (p *HopPacket, remainBytes uint, err error) {
 		return
 	}
 
-	remainBytes = len(buf)
+	remainBytes = (uint)(buf.Len())
 	return p, remainBytes, nil
 }

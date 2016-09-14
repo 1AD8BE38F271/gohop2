@@ -20,8 +20,8 @@ package vpn
 import "net"
 
 type RawPacket struct {
-	conn net.Conn
-	data []byte
+	connection net.Conn
+	data       []byte
 }
 
 func (p *RawPacket) Send() error {
@@ -32,7 +32,7 @@ func (p *RawPacket) Send() error {
 			break
 		}
 
-		n, err := p.conn.Write(p.data)
+		n, err := p.connection.Write(p.data)
 		if err != nil {
 			return err
 		}
