@@ -20,7 +20,7 @@ package main
 
 import (
 	"flag"
-	"./vpn"
+	"../vpn"
 )
 
 var cfgFile string

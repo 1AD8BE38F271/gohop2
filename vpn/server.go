@@ -39,24 +39,23 @@ const (
 var log logger.Logger
 
 type CandyVPNServer struct {
-	cfg       CandyVPNServerConfig
-	peers     *VPNPeers
-	iface     *tuntap.Interface
+	cfg        CandyVPNServerConfig
+	peers      *VPNPeers
+	iface      *tuntap.Interface
 
 	//读取Tun并转发:
-	//[Server Tun] —> [fromIface buf] —> [toNet buf]—>udp—> [Client]
+	//[Server Tun] —> [fromIface buf] —> [toNet buf] —> [Client]
 
 	//接收客户端节点的Data类型协议包并转发:
-	//[Client] —>udp—> [fromNet buf] —> [toIface buf] —> [Server Tun]
+	//[Client] —> [fromNet buf] —> [toIface buf] —> [Server Tun]
 
 	//接收客户端节控制类型协议包并回复:
-	//[Client] —>udp—> [fromNet buf] —>udp—> [Client]
+	//[Client] —> [fromNet buf] —> [Client]
 
-	fromNet   PacketStreams
-	toNet     chan *RawPacket
-	fromIface chan []byte
-	toIface   chan []byte
-	pktHandle map[Protocol](func(*VPNPeer, *HopPacket))
+	netStreams PacketStreams
+	fromIface  chan []byte
+	toIface    chan []byte
+	pktHandle  map[Protocol](func(*VPNPeer, *HopPacket))
 }
 
 func NewServer(cfg CandyVPNServerConfig) (err error) {
@@ -72,12 +71,11 @@ func NewServer(cfg CandyVPNServerConfig) (err error) {
 	//}
 
 	hopServer := new(CandyVPNServer)
-	hopServer.fromNet = make(chan *RawPacket, BUF_SIZE)
+	hopServer.netStreams = NewPacketStreams()
 	hopServer.fromIface = make(chan []byte, BUF_SIZE)
 	hopServer.toIface = make(chan []byte, BUF_SIZE * 4)
 	hopServer.peers = new(VPNPeers)
 	hopServer.cfg = cfg
-	hopServer.toNet = make(chan *RawPacket, BUF_SIZE)
 
 	iface, err := tuntap.NewTUN("tun1")
 	if err != nil {
@@ -164,8 +162,11 @@ func (srv *CandyVPNServer) listen(protocol conn.TransProtocol, addr string) {
 					return
 				}
 
-				packet := RawPacket{data:buf[:plen], connection:connection}
-				srv.fromNet <- &packet
+				err = srv.netStreams.Input(connection, buf[:plen])
+				if err != nil && err != needMoreData {
+					srv.netStreams.Close(connection)
+					return
+				}
 			}
 		}(connection)
 	}
@@ -182,15 +183,6 @@ func (srv *CandyVPNServer) forwardFrames() {
 		HOP_FLG_FIN:               srv.handleFinish,
 	}
 
-	go func() {
-		for {
-			select {
-			case packet := <-srv.toNet:
-				packet.Send()
-			}
-		}
-	}()
-
 	for {
 		select {
 		case pack := <-srv.fromIface:
@@ -206,37 +198,33 @@ func (srv *CandyVPNServer) forwardFrames() {
 
 			}
 
-		case packet := <-srv.fromNet:
-			hPack, remainBytes, err := unpackHopPacket(packet.data)
-			if err != nil {
-				log.Error(err.Error())
-				packet.connection.Close()
+		case inPacket := <-srv.netStreams.InPackets:
+			hPack := inPacket.hp
+			var peer *VPNPeer
+			var found bool
+			var err error
+
+			if handle_func, ok := srv.pktHandle[hPack.Proto]; ok {
+				peer, found = srv.peers.PeersByID[hPack.Sid]
+
+				if !found && hPack.Proto == HOP_FLG_HSH {
+					peer, err = srv.peers.NewPeer(hPack.Sid, inPacket.stream)
+					if err != nil {
+						log.Errorf("Cant alloc IP from pool %v", err)
+					}
+				} else if !found {
+					continue
+				}
+
+				peer.LastSeenTime = time.Now()
+				if handle_func != nil {
+					handle_func(peer, hPack)
+				}
 
 			} else {
-				if handle_func, ok := srv.pktHandle[hPack.Proto]; ok {
-					peer, found := srv.peers.PeersByID[hPack.Sid]
-
-					if !found {
-						if hPack.Proto == HOP_FLG_HSH {
-							peer, err = srv.peers.NewPeer(hPack.Sid, packet.connection)
-							if err != nil {
-								log.Errorf("Cant alloc IP from pool %v", err)
-								continue
-							}
-						}
-					}
-
-					if found {
-						peer.LastSeenTime = time.Now()
-						if handle_func != nil {
-							handle_func(peer, hPack)
-						}
-					}
-
-				} else {
-					log.Errorf("Unkown flag: %x", hPack.Proto)
-				}
+				log.Errorf("Unkown flag: %x", hPack.Proto)
 			}
+
 		}
 	}
 }
@@ -244,8 +232,7 @@ func (srv *CandyVPNServer) forwardFrames() {
 func (srv *CandyVPNServer) SendToClient(peer *VPNPeer, p AppPacket) {
 	hp := NewHopPacket(peer, p)
 	log.Debugf("peer: %v", peer)
-	upacket := &RawPacket{data:hp.Pack(), connection:peer.RandomConn()}
-	srv.toNet <- upacket
+	srv.netStreams.Output(peer.RandomStream(), hp)
 }
 
 func (srv *CandyVPNServer) handlePing(hpeer *VPNPeer, hp *HopPacket) {

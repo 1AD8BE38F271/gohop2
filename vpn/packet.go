@@ -17,29 +17,246 @@
 
 package vpn
 
-import "net"
+import (
+	"bytes"
+	"encoding/binary"
+	"fmt"
+	"strings"
+	"net"
+)
 
-type RawPacket struct {
-	connection net.Conn
-	data       []byte
+type Protocol uint32
+
+const (
+	HOP_ACK_MARK Protocol = 0x01 // acknowledge
+	HOP_PROTO_VERSION Protocol = 0x01 // protocol version
+
+
+	HOP_FLG_PING Protocol = 0x80
+	HOP_FLG_PING_ACK Protocol = HOP_ACK_MARK | HOP_FLG_PING
+
+	HOP_FLG_HSH Protocol = 0x40
+	HOP_FLG_HSH_ACK Protocol = HOP_ACK_MARK | HOP_FLG_HSH
+
+	HOP_FLG_FIN Protocol = 0x20
+	HOP_FLG_FIN_ACK Protocol = HOP_ACK_MARK | HOP_FLG_FIN
+
+	HOP_FLG_DAT Protocol = 0x10
+	HOP_FLG_DAT_ACK Protocol = HOP_ACK_MARK | HOP_FLG_DAT
+
+	HOP_STAT_INIT int32 = iota // initing
+	HOP_STAT_HANDSHAKE              // handeshaking
+	HOP_STAT_WORKING                // working
+	HOP_STAT_FIN                    // finishing
+)
+
+type AppPacket interface {
+	Pack() []byte
+	Unpack(buf *bytes.Buffer) error
+	String() string
+	Protocol() Protocol
 }
 
-func (p *RawPacket) Send() error {
-	num := len(p.data)
+type HandshakePacket struct{}
 
-	for {
-		if num <= 0 {
-			break
-		}
+func (p *HandshakePacket) Pack() []byte {
+	panic("Not implemented")
+	return []byte{}
+}
 
-		n, err := p.connection.Write(p.data)
-		if err != nil {
-			return err
-		}
+func (p *HandshakePacket) Unpack(buf *bytes.Buffer) error {
+	return nil
+}
 
-		num -= n
+func (p *HandshakePacket) Protocol() Protocol {
+	return HOP_FLG_HSH
+}
+
+func (p *HandshakePacket) String() string {
+	return ""
+}
+
+type HandshakeAckPacket struct {
+	Ip       net.IP
+	MaskSize int
+}
+
+func (p *HandshakeAckPacket) Pack() []byte {
+	buf := bytes.NewBuffer(make([]byte, 0, binary.Size(p)))
+	binary.Write(buf, binary.BigEndian, p)
+	return buf.Bytes()
+}
+
+func (p *HandshakeAckPacket) Unpack(buf *bytes.Buffer) error {
+	return nil
+}
+func (p *HandshakeAckPacket) Protocol() Protocol {
+	return HOP_FLG_HSH_ACK
+}
+
+func (p *HandshakeAckPacket) String() string {
+	return fmt.Sprintf("IP:%v, MaskSize:%d", p.Ip.String(), p.MaskSize)
+}
+
+type PingPacket struct {
+}
+
+func (p *PingPacket) Pack() []byte {
+	return []byte{}
+}
+func (p *PingPacket) Unpack(buf *bytes.Buffer) error {
+	return nil
+}
+
+func (p *PingPacket) Protocol() Protocol {
+	return HOP_FLG_PING
+}
+
+func (p *PingPacket) String() string {
+	return ""
+}
+
+type PingAckPacket struct {
+}
+
+func (p *PingAckPacket) Pack() []byte {
+	return []byte{}
+}
+
+func (p *PingAckPacket) Unpack(buf *bytes.Buffer) error {
+	return nil
+}
+
+func (p *PingAckPacket) Protocol() Protocol {
+	return HOP_FLG_PING_ACK
+}
+
+func (p *PingAckPacket) String() string {
+	return ""
+}
+
+type FinPacket struct {
+}
+
+func (p *FinPacket) Unpack(buf *bytes.Buffer) error {
+	return nil
+}
+
+func (p *FinPacket) Pack() []byte {
+	return []byte{}
+}
+
+func (p *FinPacket) Protocol() Protocol {
+	return HOP_FLG_FIN
+}
+
+func (p *FinPacket) String() string {
+	return ""
+}
+
+type FinAckPacket struct {
+}
+
+func (p *FinAckPacket) Unpack(buf *bytes.Buffer) error {
+	return nil
+}
+
+func (p *FinAckPacket) Pack() []byte {
+	return []byte{}
+}
+
+func (p *FinAckPacket) Protocol() Protocol {
+	return HOP_FLG_FIN_ACK
+}
+
+func (p *FinAckPacket) String() string {
+	return ""
+}
+
+type DataPacket struct {
+	Dlen    uint16
+	Payload []byte
+}
+
+func (p *DataPacket) Unpack(buf *bytes.Buffer) error {
+	return nil
+}
+
+func (p *DataPacket) Pack() []byte {
+	p.Dlen = uint16(len(p.Payload))
+
+	buf := bytes.NewBuffer(make([]byte, 0, 4 + p.Dlen))
+	binary.Write(buf, binary.BigEndian, p.Dlen)
+	binary.Write(buf, binary.BigEndian, p.Payload)
+	return buf.Bytes()
+}
+
+func (p *DataPacket) Protocol() Protocol {
+	return HOP_FLG_DAT
+}
+
+func (p *DataPacket) String() string {
+	return ""
+}
+
+type HopPacket struct {
+	Sid    uint32
+	Proto  Protocol
+	Seq    uint32
+	Dlen   uint32 //发送前要设置
+	packet AppPacket
+}
+
+func (p *HopPacket) Pack() []byte {
+	Payload := p.packet.Pack()
+	p.Dlen = uint32(len(Payload))
+
+	buf := bytes.NewBuffer(make([]byte, 0, p.HeaderSize() + p.Dlen))
+	binary.Write(buf, binary.BigEndian, p.Sid)
+	binary.Write(buf, binary.BigEndian, p.Proto)
+	binary.Write(buf, binary.BigEndian, p.Seq)
+	binary.Write(buf, binary.BigEndian, p.Dlen)
+	binary.Write(buf, binary.BigEndian, Payload)
+
+	b := buf.Bytes()
+	return b
+}
+
+func (p *HopPacket) HeaderSize() uint32 {
+	return 16
+}
+
+func (p *HopPacket) String() string {
+	flag := make([]string, 0, 8)
+	if (p.Proto == 0) {
+		flag = append(flag, "DAT")
+	}
+	if p.Proto & HOP_FLG_PING != 0 {
+		flag = append(flag, "PING")
+	}
+	if p.Proto & HOP_FLG_HSH != 0 {
+		flag = append(flag, "HSH")
+	}
+	if p.Proto & HOP_FLG_FIN != 0 {
+		flag = append(flag, "FIN")
+	}
+	if p.Proto & HOP_ACK_MARK != 0 {
+		flag = append(flag, "ACK")
 	}
 
-	return nil
+	sflag := strings.Join(flag, " | ")
+	return fmt.Sprintf(
+		"{Flag: %s, Seq: %d, Dlen: %d, Payload: %s}",
+		sflag, p.Seq, p.Dlen, p.packet.String(),
+	)
+}
+
+func NewHopPacket(peer *VPNPeer, p AppPacket) *HopPacket {
+	hp := new(HopPacket)
+	hp.Sid = peer.Id
+	hp.Seq = peer.NextSeq()
+	hp.Proto = p.Protocol()
+	hp.packet = p
+	return hp
 }
 

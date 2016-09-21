@@ -25,13 +25,13 @@ import (
 )
 
 type VPNPeer struct {
-	Id           uint32
-	Ip           net.IP
-	seq          uint32
-	state        int32
-	hsDone       chan struct{}
-	LastSeenTime time.Time
-	Connections  []net.Conn
+	Id            uint32
+	Ip            net.IP
+	seq           uint32
+	state         int32
+	hsDone        chan struct{}
+	LastSeenTime  time.Time
+	activeStreams []string
 }
 
 func NewVPNPeer(id uint32, ip net.IP) *VPNPeer {
@@ -41,19 +41,19 @@ func NewVPNPeer(id uint32, ip net.IP) *VPNPeer {
 	hp.Id = id
 	hp.Ip = ip
 	hp.LastSeenTime = time.Now()
-	hp.Connections = make([]net.Conn, 0)
+	hp.activeStreams = make([]string, 0)
 	hp.hsDone = make(chan struct{})
 
 	return hp
 }
 
-func (peer *VPNPeer) AddConnection(conn net.Conn) {
-	peer.Connections = append(peer.Connections, conn)
+func (peer *VPNPeer) AddStream(stream string) {
+	peer.activeStreams = append(peer.activeStreams, stream)
 }
 
-func (peer *VPNPeer) RandomConn() net.Conn {
-	index := rand.Intn(len(peer.Connections))
-	return peer.Connections[index]
+func (peer *VPNPeer) RandomStream() string {
+	index := rand.Intn(len(peer.activeStreams))
+	return peer.activeStreams[index]
 }
 
 func (peer *VPNPeer) NextSeq() uint32 {
@@ -76,7 +76,7 @@ func NewVPNPeers(subnet *net.IPNet, timeout time.Duration) (vs *VPNPeers) {
 	return
 }
 
-func (vs *VPNPeers) NewPeer(id uint32, conn net.Conn) (peer *VPNPeer, err error) {
+func (vs *VPNPeers) NewPeer(id uint32, stream string) (peer *VPNPeer, err error) {
 	ipnet, err := vs.ippool.Next()
 	if err != nil {
 		return
@@ -85,13 +85,13 @@ func (vs *VPNPeers) NewPeer(id uint32, conn net.Conn) (peer *VPNPeer, err error)
 	peer = NewVPNPeer(id, ipnet.IP)
 	vs.PeersByIp[peer.Ip.String()] = peer
 	vs.PeersByID[id] = peer
-	vs.AddConnection(conn, peer)
+	vs.AddStreamTo(stream, peer)
 	return
 }
 
-func (vs *VPNPeers) AddConnection(conn net.Conn, peer *VPNPeer) {
+func (vs *VPNPeers) AddStreamTo(stream string, peer *VPNPeer) {
 	if _, ok := vs.PeersByIp[peer.Ip.String()]; ok {
-		peer.AddConnection(conn)
+		peer.AddStream(stream)
 	}
 }
 
