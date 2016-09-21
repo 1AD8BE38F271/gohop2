@@ -28,7 +28,8 @@ import (
 type Protocol uint32
 
 const (
-	HOP_ACK_MARK Protocol = 0x01 // acknowledge
+	HOP_ACK_MARK Protocol = 0x01      // acknowledge
+	HOP_ERROR_MARK Protocol = 0x02    // error
 	HOP_PROTO_VERSION Protocol = 0x01 // protocol version
 
 
@@ -37,6 +38,7 @@ const (
 
 	HOP_FLG_HSH Protocol = 0x40
 	HOP_FLG_HSH_ACK Protocol = HOP_ACK_MARK | HOP_FLG_HSH
+	HOP_FLG_HSH_ERR Protocol = HOP_ERROR_MARK | HOP_FLG_HSH
 
 	HOP_FLG_FIN Protocol = 0x20
 	HOP_FLG_FIN_ACK Protocol = HOP_ACK_MARK | HOP_FLG_FIN

@@ -25,26 +25,24 @@ import (
 	mrand "math/rand"
 	"net"
 	"os"
-	"os/exec"
 	"os/signal"
-	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
 	"github.com/FTwOoO/vpncore/tuntap"
-	"github.com/bigeagle/gohop/hop"
-	"github.com/songgao/water"
+	"github.com/FTwOoO/vpncore/conn"
+	"github.com/FTwOoO/go-logger"
+
 )
 
 type CandyVPNClient struct {
-	cfg            HopClientConfig
+	cfg            CandyVPNServerConfig
 	iface          *tuntap.Interface
 	ip             net.IP
 	sid            [4]byte
 	state          int32
 
-	toIface        chan *HopPacket
-	recvBuf        *hopPacketBuffer
+	toIface        chan []byte
 	toNet          chan *HopPacket
 
 	handshakeDone  chan struct{}
@@ -53,28 +51,24 @@ type CandyVPNClient struct {
 	seq            uint32
 }
 
+var log logger.Logger
+
+
 func NewClient(cfg CandyVPNServerConfig) error {
 	var err error
 
-	cipher, err = newHopCipher([]byte(cfg.Key))
-	if err != nil {
-		return err
-	}
 
 	hopClient := new(CandyVPNClient)
 	rand.Read(hopClient.sid[:])
-	hopClient.toIface = make(chan *HopPacket, 128)
+	hopClient.toIface = make(chan []byte, 128)
 	hopClient.toNet = make(chan *HopPacket, 128)
-	hopClient.recvBuf = newHopPacketBuffer(hopClient.toIface)
 	hopClient.cfg = cfg
 	hopClient.state = HOP_STAT_INIT
 	hopClient.handshakeDone = make(chan struct{})
 	hopClient.handshakeError = make(chan struct{})
 	hopClient.finishAck = make(chan byte)
 
-	go hopClient.cleanUp()
-
-	iface, err := water.NewTUN("tun1")
+	iface, err := tuntap.NewTUN("tun1")
 	if err != nil {
 		return err
 	}
@@ -84,9 +78,10 @@ func NewClient(cfg CandyVPNServerConfig) error {
 		panic(err)
 	}
 
-	for port := cfg.HopStart; port <= cfg.HopEnd; port++ {
-		server := fmt.Sprintf("%s:%d", cfg.Server, port)
-		go hopClient.handleUDP(server)
+	for port := cfg.PortStart; port <= cfg.PortEnd; port++ {
+		server := fmt.Sprintf("%s:%d", cfg.ListenAddr, port)
+		proto := conn.PROTO_TCP
+		go hopClient.connect(proto, server)
 	}
 
 
@@ -95,28 +90,29 @@ func NewClient(cfg CandyVPNServerConfig) error {
 	for {
 		select {
 		case <-hopClient.handshakeDone:
-			logger.Info("Handshake Success")
+			log.Info("Handshake Success")
 			break wait_handshake
 		case <-hopClient.handshakeError:
 			return errors.New("Handshake Fail")
 		case <-time.After(3 * time.Second):
-			logger.Info("Handshake Timeout")
+			log.Info("Handshake Timeout")
 			atomic.CompareAndSwapInt32(&hopClient.state, HOP_STAT_HANDSHAKE, HOP_STAT_INIT) //这行代码可以放到
 		}
 	}
 
-	err = iface.RedirectGatewayToMe()
+	err = iface.ClientRedirectGateway()
 	if err != nil {
 		return err
 	}
 
 	if cfg.DNS != nil {
-		err = iface.SetupNewDNS(cfg.DNS)
+		err = iface.ClientSetupNewDNS(cfg.DNS)
 		if err != nil {
 			return err
 		}
 	}
 
+	go hopClient.cleanUp()
 	hopClient.handleInterface()
 
 	return errors.New("Not expected to exit")
@@ -126,11 +122,10 @@ func (clt *CandyVPNClient) handleInterface() {
 	// network packet to interface
 	go func() {
 		for {
-			hp := <-clt.toIface
-			logger.Debugf("New hp packet prepare write device: %s", hp.String())
-			_, err := clt.iface.Write(hp.payload)
+			packet := <-clt.toIface
+			_, err := clt.iface.Write(packet)
 			if err != nil {
-				logger.Error(err.Error())
+				log.Error(err.Error())
 				return
 			}
 		}
@@ -140,52 +135,43 @@ func (clt *CandyVPNClient) handleInterface() {
 	for {
 		n, err := clt.iface.Read(frame)
 		if err != nil {
-			logger.Error(err.Error())
+			log.Error(err.Error())
 			return
 		}
-		logger.Debug("Got a packet of %d length from %s", n, clt.iface.Name())
-
 		buf := make([]byte, n)
 		copy(buf, frame)
-		hp := new(HopPacket)
-		hp.Flag = HOP_FLG_DAT
-		hp.payload = buf
-		hp.Seq = clt.Seq()
-		clt.toNet <- hp
+		clt.toNet <- NewHopPacket(peer, &DataPacket{Payload:buf})
 	}
 }
 
-func (clt *CandyVPNClient) handleUDP(server string) {
-	udpAddr, _ := net.ResolveUDPAddr("udp", server)
-	udpConn, _ := net.DialUDP("udp", nil, udpAddr)
+func (clt *CandyVPNClient) connect(proto conn.TransProtocol, serverAddr string) {
+	connection, _ := conn.Dial(proto, serverAddr)
 
-	logger.Debug(udpConn.RemoteAddr().String())
 
 	pktHandle := map[byte](func(*net.UDPConn, *HopPacket)){
-		HOP_FLG_HSH | HOP_FLG_ACK: clt.handleHandshakeAck,
-		HOP_FLG_HSH | HOP_FLG_FIN: clt.handleHandshakeError,
-		HOP_FLG_PSH:               clt.handleHeartbeat,
-		HOP_FLG_PSH | HOP_FLG_ACK: clt.handleKnockAck,
+		HOP_FLG_HSH_ACK: clt.handleHandshakeAck,
+		HOP_FLG_HSH_ERR: clt.handleHandshakeError,
+		HOP_FLG_PING:               clt.handleHeartbeat,
+		HOP_FLG_PING_ACK: clt.handleKnockAck,
 		HOP_FLG_DAT:               clt.handleDataPacket,
-		HOP_FLG_DAT | HOP_FLG_MFR: clt.handleDataPacket,
-		HOP_FLG_FIN | HOP_FLG_ACK: clt.handleFinishAck,
+		HOP_FLG_FIN_ACK: clt.handleFinishAck,
 		HOP_FLG_FIN:               clt.handleFinish,
 	}
 
 	go func() {
 		for {
 			//TODO:应该把这个去掉，并且把HANDSHAKE的回复作为该端口唯一可用的判断
-			clt.knock(udpConn)
+			clt.knock(connection)
 			n := mrand.Intn(1000)
 			time.Sleep(time.Duration(n) * time.Millisecond)
-			clt.handeshake(udpConn)
+			clt.handeshake(connection)
 			select {
 			case <-clt.handshakeDone:
 			//这个handshakeDone只有一个，一收到一个handshake回应包就close了
 			//所以这里不是每个连接都会无限重试
 				return
 			case <-time.After(5 * time.Second):
-				logger.Debug("Handshake timeout, retry")
+				log.Debug("Handshake timeout, retry")
 			}
 		}
 	}()
@@ -201,13 +187,13 @@ func (clt *CandyVPNClient) handleUDP(server string) {
 		for {
 			time.Sleep(intval)
 			if clt.state == HOP_STAT_WORKING {
-				clt.knock(udpConn)
+				clt.knock(connection)
 			}
 		}
 	}()
 
 	// add route through net gateway
-	if udpAddr, ok := udpConn.RemoteAddr().(*net.UDPAddr); ok {
+	if udpAddr, ok := connection.RemoteAddr().(*net.UDPAddr); ok {
 		srvIP := udpAddr.IP.To4()
 		if srvIP != nil {
 			clt.iface.Router().AddRouteToHost(clt.iface.DefaultNic(), srvIP, clt.iface.DefaultGateway())
@@ -221,32 +207,32 @@ func (clt *CandyVPNClient) handleUDP(server string) {
 		for {
 			hp := <-clt.toNet
 			hp.setSid(clt.sid)
-			logger.Debugf("send packet")
+			log.Debugf("send packet")
 
-			udpConn.Write(hp.Pack())
+			connection.Write(hp.Pack())
 		}
 	}()
 
 	buf := make([]byte, IFACE_BUFSIZE)
 	for {
-		n, err := udpConn.Read(buf)
-		logger.Debugf("New incomming packet, len: %d", n)
+		n, err := connection.Read(buf)
+		log.Debugf("New incomming packet, len: %d", n)
 		if err != nil {
-			logger.Error(err.Error())
+			log.Error(err.Error())
 			continue
 		}
 
 		hp, err := unpackHopPacket(buf[:n])
 		if err != nil {
-			logger.Debug("Error depacketing")
+			log.Debug("Error depacketing")
 			continue
 		}
 
-		logger.Debug("New incomming hop packet: %s", hp.String())
+		log.Debug("New incomming hop packet: %s", hp.String())
 		if handle_func, ok := pktHandle[hp.Flag]; ok {
-			handle_func(udpConn, hp)
+			handle_func(connection, hp)
 		} else {
-			logger.Errorf("Unkown flag: %x", hp.Flag)
+			log.Errorf("Unkown flag: %x", hp.Flag)
 		}
 	}
 }
@@ -276,14 +262,14 @@ func (clt *CandyVPNClient) handeshake(u *net.UDPConn) {
 	res := atomic.CompareAndSwapInt32(&clt.state, HOP_STAT_INIT, HOP_STAT_HANDSHAKE)
 
 	if res {
-		logger.Info("start handeshaking")
+		log.Info("start handeshaking")
 		clt.toServer(u, HOP_FLG_HSH, clt.sid[:], true)
 	}
 }
 
 // finish session
 func (clt *CandyVPNClient) finishSession() {
-	logger.Info("Finishing Session")
+	log.Info("Finishing Session")
 	atomic.StoreInt32(&clt.state, HOP_STAT_FIN)
 	hp := new(HopPacket)
 	hp.Flag = HOP_FLG_FIN
@@ -300,7 +286,7 @@ func (clt *CandyVPNClient) handleKnockAck(u *net.UDPConn, hp *HopPacket) {
 
 // heartbeat ack
 func (clt *CandyVPNClient) handleHeartbeat(u *net.UDPConn, hp *HopPacket) {
-	logger.Debug("Heartbeat from server")
+	log.Debug("Heartbeat from server")
 	clt.toServer(u, HOP_FLG_PSH | HOP_FLG_ACK, clt.sid[:], true)
 }
 
@@ -309,7 +295,7 @@ func (clt *CandyVPNClient) handleHandshakeAck(u *net.UDPConn, hp *HopPacket) {
 	if atomic.LoadInt32(&clt.state) == HOP_STAT_HANDSHAKE {
 		proto_version := hp.payload[0]
 		if proto_version != HOP_PROTO_VERSION {
-			logger.Error("Incompatible protocol version!")
+			log.Error("Incompatible protocol version!")
 			os.Exit(1)
 		}
 
@@ -325,14 +311,14 @@ func (clt *CandyVPNClient) handleHandshakeAck(u *net.UDPConn, hp *HopPacket) {
 
 		res := atomic.CompareAndSwapInt32(&clt.state, HOP_STAT_HANDSHAKE, HOP_STAT_WORKING)
 		if !res {
-			logger.Errorf("Client state not expected: %d", clt.state)
+			log.Errorf("Client state not expected: %d", clt.state)
 		}
-		logger.Info("Session Initialized")
+		log.Info("Session Initialized")
 		close(clt.handshakeDone)
 	}
 
-	logger.Debug("Handshake Ack to Server")
-	clt.toServer(u, hop.HOP_FLG_ACK, clt.sid[:], true)
+	log.Debug("Handshake Ack to Server")
+	clt.toServer(u, HOP_FLG_ACK, clt.sid[:], true)
 }
 
 // handle handshake fail
@@ -352,7 +338,7 @@ func (clt *CandyVPNClient) handleFinishAck(u *net.UDPConn, hp *HopPacket) {
 
 // handle finish
 func (clt *CandyVPNClient) handleFinish(u *net.UDPConn, hp *HopPacket) {
-	logger.Info("Finish")
+	log.Info("Finish")
 	pid := os.Getpid()
 	syscall.Kill(pid, syscall.SIGTERM)
 }
@@ -362,7 +348,7 @@ func (clt *CandyVPNClient) cleanUp() {
 	signal.Notify(c, syscall.SIGINT, syscall.SIGTERM, syscall.SIGKILL, syscall.SIGQUIT)
 	<-c
 
-	logger.Info("Cleaning Up")
+	log.Info("Cleaning Up")
 	timeout := time.After(3 * time.Second)
 	if clt.state != HOP_STAT_INIT {
 		clt.finishSession()
@@ -370,21 +356,9 @@ func (clt *CandyVPNClient) cleanUp() {
 
 	select {
 	case <-clt.finishAck:
-		logger.Info("Finish Acknowledged")
+		log.Info("Finish Acknowledged")
 	case <-timeout:
-		logger.Info("Timeout, give up")
-	}
-
-	if clt.cfg.Down != "" {
-		args := strings.Split(clt.cfg.Down, " ")
-		var cmd *exec.Cmd
-		if len(args) == 1 {
-			cmd = exec.Command(args[0])
-		} else {
-			cmd = exec.Command(args[0], args[1:]...)
-		}
-		logger.Info(clt.cfg.Down)
-		cmd.Run()
+		log.Info("Timeout, give up")
 	}
 
 	// delete all routes and reset default gateway
