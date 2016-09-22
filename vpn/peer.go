@@ -53,6 +53,10 @@ func (peer *VPNPeer) AddStream(stream string) {
 
 func (peer *VPNPeer) RandomStream() string {
 	index := rand.Intn(len(peer.activeStreams))
+	if index >= len(peer.activeStreams) {
+		return ""
+	}
+
 	return peer.activeStreams[index]
 }
 

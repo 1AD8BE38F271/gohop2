@@ -43,18 +43,10 @@ type CandyVPNServer struct {
 	peers      *VPNPeers
 	iface      *tuntap.Interface
 
-	//读取Tun并转发:
-	//[Server Tun] —> [fromIface buf] —> [toNet buf] —> [Client]
-
-	//接收客户端节点的Data类型协议包并转发:
-	//[Client] —> [fromNet buf] —> [toIface buf] —> [Server Tun]
-
-	//接收客户端节控制类型协议包并回复:
-	//[Client] —> [fromNet buf] —> [Client]
-
 	netStreams PacketStreams
 	fromIface  chan []byte
 	toIface    chan []byte
+
 	pktHandle  map[Protocol](func(*VPNPeer, *HopPacket))
 }
 
@@ -158,6 +150,7 @@ func (srv *CandyVPNServer) listen(protocol conn.TransProtocol, addr string) {
 				buf := make([]byte, IFACE_BUFSIZE)
 				plen, err = connection.Read(buf)
 				if err != nil {
+					srv.netStreams.Close(connection)
 					log.Error(err.Error())
 					return
 				}

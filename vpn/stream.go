@@ -40,6 +40,10 @@ func NewStream(c net.Conn) *Stream {
 	return &s
 }
 
+func (s *Stream) GetKey() string {
+	return s.Connection.RemoteAddr().String()
+}
+
 func (s *Stream) Input(data []byte) error {
 	if int(s.Len) + len(data) > BUF_SIZE {
 		return fmt.Errorf("Incomming data exceed buf size %d!", BUF_SIZE)
