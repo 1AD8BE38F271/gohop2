@@ -33,16 +33,16 @@ import (
 )
 
 type CandyVPNClient struct {
-	cfg           VPNConfig
+	cfg        VPNConfig
 
-	iface         *tuntap.Interface
-	peer          *VPNPeer
-	toIface       chan []byte
-	netStreams    PacketStreams
+	iface      *tuntap.Interface
+	peer       *VPNPeer
+	toIface    chan []byte
+	netStreams PacketStreams
 
-	pktHandle     map[Protocol]func(string, *HopPacket)
+	pktHandle  map[Protocol]func(string, *HopPacket)
 
-	finishAck     chan struct{} //清理时是主动发送FIN包，这个chan只是用来锁定是否收到的FIN的回应
+	finishAck  chan struct{} //清理时是主动发送FIN包，这个chan只是用来锁定是否收到的FIN的回应
 }
 
 func NewClient(cfg VPNConfig) error {
@@ -85,7 +85,6 @@ func NewClient(cfg VPNConfig) error {
 	}
 
 
-	// wait until handshake done
 	wait_handshake:
 	for {
 		select {
@@ -170,12 +169,11 @@ func (clt *CandyVPNClient) connect(proto conn.TransProtocol, serverAddr string) 
 
 func (clt *CandyVPNClient) handleConnection(streamKey string) {
 
-	stream, ok := clt.netStreams.Streams[streamKey]
+	_, ok := clt.netStreams.Streams[streamKey]
 	if !ok {
 		return
 	}
 
-	connection := stream.Connection
 	connectionDone := make(chan struct{}, 1)
 
 	go func(done  <- chan struct{}) {
@@ -199,7 +197,7 @@ func (clt *CandyVPNClient) handleConnection(streamKey string) {
 				return
 			case <-time.After((clt.cfg.PeerTimeout / 2) * time.Second):
 				if clt.peer.state == HOP_STAT_WORKING {
-				clt.ping()
+					clt.ping()
 				}
 			case <-done:
 				return
@@ -207,18 +205,11 @@ func (clt *CandyVPNClient) handleConnection(streamKey string) {
 		}
 	}(connectionDone)
 
-	buf := make([]byte, IFACE_BUFSIZE)
 	for {
-		n, err := connection.Read(buf)
-		log.Debugf("New incomming packet, len: %d", n)
+		err := clt.netStreams.Read(streamKey)
 		if err != nil {
 			log.Error(err.Error())
-			clt.netStreams.Close(streamKey)
-			return
-		}
-
-		err = clt.netStreams.Input(streamKey, buf[:n])
-		if err != nil {
+			close(connectionDone)
 			clt.netStreams.Close(streamKey)
 			return
 		}
@@ -227,7 +218,7 @@ func (clt *CandyVPNClient) handleConnection(streamKey string) {
 
 func (clt *CandyVPNClient) sendToServer(p AppPacket) {
 	hp := NewHopPacket(clt.peer, p)
-	clt.netStreams.Output(clt.peer.RandomStream(), hp)
+	clt.netStreams.Write(clt.peer.RandomStream(), hp)
 }
 
 func (clt *CandyVPNClient) ping() {

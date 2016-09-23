@@ -145,24 +145,17 @@ func (srv *CandyVPNServer) listen(protocol conn.TransProtocol, addr string) {
 
 		streamK, _ := srv.netStreams.AddConnection(connection)
 
-		go func(streamK string, connection net.Conn) {
+		go func(streamK string) {
 			for {
-				var plen int
-				buf := make([]byte, IFACE_BUFSIZE)
-				plen, err = connection.Read(buf)
+				err = srv.netStreams.Read(streamK)
 				if err != nil {
 					srv.netStreams.Close(streamK)
 					log.Error(err.Error())
 					return
 				}
 
-				err = srv.netStreams.Input(streamK, buf[:plen])
-				if err != nil && err != needMoreData {
-					srv.netStreams.Close(streamK)
-					return
-				}
 			}
-		}(streamK, connection)
+		}(streamK)
 	}
 }
 
@@ -226,7 +219,7 @@ func (srv *CandyVPNServer) forwardFrames() {
 func (srv *CandyVPNServer) SendToClient(peer *VPNPeer, p AppPacket) {
 	hp := NewHopPacket(peer, p)
 	log.Debugf("peer: %v", peer)
-	srv.netStreams.Output(peer.RandomStream(), hp)
+	srv.netStreams.Write(peer.RandomStream(), hp)
 }
 
 func (srv *CandyVPNServer) handlePing(hpeer *VPNPeer, hp *HopPacket) {

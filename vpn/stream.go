@@ -56,7 +56,7 @@ func (s *Stream) Input(data []byte) error {
 
 func (s *Stream) Unpack() (p *HopPacket, err error) {
 	p, remainBytes, err := s.tryUnpackHopPacket(s.InBuf)
-	if err != nil {
+	if err != nil && err != needMoreData {
 		return
 	}
 
@@ -139,6 +139,23 @@ func (p *PacketStreams) AddConnection(c net.Conn) (streamKey string, err error) 
 	return
 }
 
+func (p *PacketStreams) Read(streamKey string) (err error) {
+	stream, ok := p.Streams[streamKey]
+	if !ok {
+		return fmt.Errorf("Stream with key %s not found!", streamKey)
+	}
+
+	buf := make([]byte, IFACE_BUFSIZE)
+
+	n, err := stream.Connection.Read(buf)
+	if err != nil {
+		return
+	}
+	log.Debugf("New incomming packet, len: %d", n)
+	err = p.Input(streamKey, buf[:n])
+	return
+}
+
 func (p *PacketStreams) Input(streamKey string, data []byte) (err error) {
 	stream, ok := p.Streams[streamKey]
 	if !ok {
@@ -151,6 +168,10 @@ func (p *PacketStreams) Input(streamKey string, data []byte) (err error) {
 	}
 	for {
 		packet, err := stream.Unpack()
+		if err == needMoreData {
+			return nil
+		}
+
 		if err != nil {
 			return err
 		}
@@ -159,14 +180,13 @@ func (p *PacketStreams) Input(streamKey string, data []byte) (err error) {
 	}
 }
 
-func (p *PacketStreams) Output(streamKey string, hp *HopPacket) (err error) {
+func (p *PacketStreams) Write(streamKey string, hp *HopPacket) (err error) {
 	stream, ok := p.Streams[streamKey]
 	if !ok {
 		return errors.New("No this stream!")
 	}
 
 
-	//TODO: sent packets using another go routine
 	data := hp.Pack()
 	plen := len(data)
 
