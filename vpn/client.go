@@ -100,8 +100,9 @@ func NewClient(cfg CandyVPNServerConfig) error {
 	if err != nil {
 		return err
 	}
-	if cfg.DNS != nil {
-		err = iface.ClientSetupNewDNS(cfg.DNS)
+	if cfg.DNS != "" {
+		dnsl := []net.IP{net.ParseIP(cfg.DNS)}
+		err = iface.ClientSetupNewDNS(dnsl)
 		if err != nil {
 			return err
 		}
@@ -177,8 +178,9 @@ func (clt *CandyVPNClient) handleConnection(streamKey string) {
 	}
 
 	connection := stream.Connection
+	connectionDone := make(chan struct{}, 1)
 
-	go func() {
+	go func(done  <- chan struct{}) {
 		for {
 			clt.handeshake()
 			select {
@@ -186,20 +188,26 @@ func (clt *CandyVPNClient) handleConnection(streamKey string) {
 				return
 			case <-time.After(5 * time.Second):
 				log.Debug("Handshake timeout, retry")
+			case <-done:
+				return
 			}
 		}
-	}()
+	}(connectionDone)
 
-	go func() {
-		intval := time.Second * 30
-
+	go func(done  <- chan struct{}) {
 		for {
-			time.Sleep(intval)
-			if clt.peer.state == HOP_STAT_WORKING {
+			select {
+			case <-clt.handshakeDone:
+				return
+			case <-time.After((clt.cfg.PeerTimeout / 2) * time.Second):
+				if clt.peer.state == HOP_STAT_WORKING {
 				clt.ping()
+				}
+			case <-done:
+				return
 			}
 		}
-	}()
+	}(connectionDone)
 
 	buf := make([]byte, IFACE_BUFSIZE)
 	for {

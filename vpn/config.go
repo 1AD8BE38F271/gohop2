@@ -22,6 +22,7 @@ import (
 	"io/ioutil"
 	"github.com/FTwOoO/go-logger"
 	"github.com/FTwOoO/vpncore/conn"
+	"time"
 )
 
 var log logger.Logger
@@ -37,7 +38,7 @@ type CandyVPNServerConfig struct {
 	Subnet      string `toml:"subnet"`
 	MTU         int    `toml:"mtu"`
 	Key         string `toml:"key"`
-	PeerTimeout int    `toml:"peertimeout"`
+	PeerTimeout time.Duration    `toml:"peertimeout"`
 	LogFile     string `toml:"logfile"`
 	LogLevel    logger.LogLevel `toml:"loglevel"`
 }
