@@ -21,11 +21,16 @@ import (
 	"os"
 	"io/ioutil"
 	"github.com/FTwOoO/go-logger"
+	"github.com/FTwOoO/vpncore/conn"
 )
 
+var log logger.Logger
 
 // Server Config
 type CandyVPNServerConfig struct {
+	Protocol    conn.TransProtocol `toml:"protocol"`
+	ServerAddr  string `toml:"server-addr"`
+	DNS         string `toml:"local-dns"`
 	ListenAddr  string `toml:"addr"`
 	PortStart   int    `toml:"port-start"`
 	PortEnd     int    `toml:"port-end"`

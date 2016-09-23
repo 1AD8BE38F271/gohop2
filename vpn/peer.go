@@ -65,7 +65,7 @@ func (peer *VPNPeer) NextSeq() uint32 {
 }
 
 type VPNPeers struct {
-	ippool      *IPPool
+	IpPool      *IPPool
 	PeersByIp   map[string]*VPNPeer
 	PeerTimeout chan *VPNPeer
 	PeersByID   map[uint32]*VPNPeer
@@ -73,7 +73,7 @@ type VPNPeers struct {
 
 func NewVPNPeers(subnet *net.IPNet, timeout time.Duration) (vs *VPNPeers) {
 	vs = new(VPNPeers)
-	vs.ippool = &IPPool{subnet:subnet}
+	vs.IpPool = &IPPool{subnet:subnet}
 	vs.PeersByIp = map[string]*VPNPeer{}
 	vs.PeerTimeout = make(chan *VPNPeer)
 	go vs.checkTimeout(timeout)
@@ -81,7 +81,7 @@ func NewVPNPeers(subnet *net.IPNet, timeout time.Duration) (vs *VPNPeers) {
 }
 
 func (vs *VPNPeers) NewPeer(id uint32, stream string) (peer *VPNPeer, err error) {
-	ipnet, err := vs.ippool.Next()
+	ipnet, err := vs.IpPool.Next()
 	if err != nil {
 		return
 	}
@@ -100,7 +100,7 @@ func (vs *VPNPeers) AddStreamTo(stream string, peer *VPNPeer) {
 }
 
 func (vs *VPNPeers) DeletePeer(peer *VPNPeer) {
-	vs.ippool.Release(peer.Ip)
+	vs.IpPool.Release(peer.Ip)
 	delete(vs.PeersByIp, peer.Ip.String())
 	delete(vs.PeersByID, peer.Id)
 }

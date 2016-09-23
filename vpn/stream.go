@@ -107,6 +107,11 @@ func (s *Stream) tryUnpackHopPacket(b []byte) (p *HopPacket, remainBytes uint, e
 	return p, remainBytes, nil
 }
 
+func (s *Stream) Close() error {
+	return s.Connection.Close()
+}
+
+
 type InPacket struct {
 	hp     *HopPacket
 	stream string
@@ -124,12 +129,20 @@ func NewPacketStreams() PacketStreams {
 	return s
 }
 
-func (p *PacketStreams) Input(c net.Conn, data []byte) (err error) {
-	streamKey := c.RemoteAddr().String()
+func (p *PacketStreams) AddConnection(c net.Conn) (streamKey string, err error) {
+	streamKey = c.RemoteAddr().String()
+	if oldstream, ok := p.Streams[streamKey]; ok {
+		oldstream.Close()
+	}
+
+	p.Streams[streamKey] = NewStream(c)
+	return
+}
+
+func (p *PacketStreams) Input(streamKey string, data []byte) (err error) {
 	stream, ok := p.Streams[streamKey]
 	if !ok {
-		p.Streams[streamKey] = NewStream(c)
-		stream = p.Streams[streamKey]
+		return fmt.Errorf("Stream with key %s not found!", streamKey)
 	}
 
 	err = stream.Input(data)
@@ -173,12 +186,14 @@ func (p *PacketStreams) Output(streamKey string, hp *HopPacket) (err error) {
 	return
 }
 
-func (p *PacketStreams) Close(c net.Conn) {
-	key := c.RemoteAddr().String()
-
-	if _, ok := p.Streams[key]; ok {
-		delete(p.Streams, key)
-
+func (p *PacketStreams) Close(streamKey string) error {
+	stream, ok := p.Streams[streamKey]
+	if !ok {
+		return errors.New("No this stream!")
+	} else {
+		delete(p.Streams, streamKey)
+		stream.Close()
+		return nil
 	}
 }
 

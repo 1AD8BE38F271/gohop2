@@ -26,7 +26,7 @@ import (
 var cfgFile string
 
 func main() {
-	flag.StringVar(&cfgFile, "config", "server.toml", "configfile")
+	flag.StringVar(&cfgFile, "config", "config.toml", "configfile")
 	flag.Parse()
 
 	if cfgFile == "" {

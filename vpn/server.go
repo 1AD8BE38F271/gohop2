@@ -36,10 +36,9 @@ const (
 	BUF_SIZE = 2048
 )
 
-var log logger.Logger
 
 type CandyVPNServer struct {
-	cfg        CandyVPNServerConfig
+	cfg        *CandyVPNServerConfig
 	peers      *VPNPeers
 	iface      *tuntap.Interface
 
@@ -50,7 +49,7 @@ type CandyVPNServer struct {
 	pktHandle  map[Protocol](func(*VPNPeer, *HopPacket))
 }
 
-func NewServer(cfg CandyVPNServerConfig) (err error) {
+func NewServer(cfg *CandyVPNServerConfig) (err error) {
 
 	log, err := logger.NewLogger(cfg.LogFile, cfg.LogLevel)
 	if err != nil {
@@ -91,7 +90,7 @@ func NewServer(cfg CandyVPNServerConfig) (err error) {
 	hopServer.peers = NewVPNPeers(subnet, time.Duration(hopServer.cfg.PeerTimeout) * time.Second)
 
 	for port := cfg.PortStart; port <= cfg.PortEnd; port++ {
-		go hopServer.listen(conn.PROTO_KCP, fmt.Sprintf("%s:%d", cfg.ListenAddr, port))
+		go hopServer.listen(cfg.Protocol, fmt.Sprintf("%s:%d", cfg.ListenAddr, port))
 	}
 
 	go hopServer.handleInterface()
@@ -144,34 +143,36 @@ func (srv *CandyVPNServer) listen(protocol conn.TransProtocol, addr string) {
 			return
 		}
 
-		go func(connection net.Conn) {
+		streamK, _ := srv.netStreams.AddConnection(connection)
+
+		go func(streamK string, connection net.Conn) {
 			for {
 				var plen int
 				buf := make([]byte, IFACE_BUFSIZE)
 				plen, err = connection.Read(buf)
 				if err != nil {
-					srv.netStreams.Close(connection)
+					srv.netStreams.Close(streamK)
 					log.Error(err.Error())
 					return
 				}
 
-				err = srv.netStreams.Input(connection, buf[:plen])
+				err = srv.netStreams.Input(streamK, buf[:plen])
 				if err != nil && err != needMoreData {
-					srv.netStreams.Close(connection)
+					srv.netStreams.Close(streamK)
 					return
 				}
 			}
-		}(connection)
+		}(streamK, connection)
 	}
 }
 
 func (srv *CandyVPNServer) forwardFrames() {
 
 	srv.pktHandle = map[Protocol](func(*VPNPeer, *HopPacket)){
-		HOP_FLG_PING:               srv.handlePing,
-		HOP_FLG_PING_ACK: nil,
+		HOP_FLG_PING:              srv.handlePing,
+		HOP_FLG_PING_ACK:          srv.handlePingAck,
 		HOP_FLG_HSH:               srv.handleHandshake,
-		HOP_FLG_HSH_ACK: srv.handleHandshakeAck,
+		HOP_FLG_HSH_ACK:           srv.handleHandshakeAck,
 		HOP_FLG_DAT:               srv.handleDataPacket,
 		HOP_FLG_FIN:               srv.handleFinish,
 	}
@@ -234,11 +235,15 @@ func (srv *CandyVPNServer) handlePing(hpeer *VPNPeer, hp *HopPacket) {
 	}
 }
 
+func (srv *CandyVPNServer) handlePingAck(hpeer *VPNPeer, hp *HopPacket) {
+	return
+}
+
 func (srv *CandyVPNServer) handleHandshake(peer *VPNPeer, hp *HopPacket) {
 	log.Debugf("assign address %s", peer.Ip)
 	atomic.StoreInt32(&peer.state, HOP_STAT_HANDSHAKE)
 
-	size, _ := srv.peers.ippool.subnet.Mask.Size()
+	size, _ := srv.peers.IpPool.subnet.Mask.Size()
 
 	srv.SendToClient(peer,
 		&HandshakeAckPacket{
@@ -250,7 +255,7 @@ func (srv *CandyVPNServer) handleHandshake(peer *VPNPeer, hp *HopPacket) {
 		case <-peer.hsDone:
 			peer.state = HOP_STAT_WORKING
 			return
-		case <-time.After(6 * time.Second):
+		case <-time.After(8 * time.Second):
 			srv.SendToClient(peer, new(FinPacket))
 			srv.peers.DeletePeer(peer)
 		}
@@ -261,10 +266,6 @@ func (srv *CandyVPNServer) handleHandshakeAck(peer *VPNPeer, hp *HopPacket) {
 	log.Infof("Client %d Connected", peer.Ip)
 	if ok := atomic.CompareAndSwapInt32(&peer.state, HOP_STAT_HANDSHAKE, HOP_STAT_WORKING); ok {
 		peer.hsDone <- struct{}{}
-	} else {
-		log.Warningf("Invalid peer state: %v", peer.Ip)
-		srv.peers.DeletePeer(peer)
-		srv.SendToClient(peer, new(FinPacket))
 	}
 }
 
