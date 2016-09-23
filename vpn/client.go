@@ -33,7 +33,7 @@ import (
 )
 
 type CandyVPNClient struct {
-	cfg           CandyVPNServerConfig
+	cfg           VPNConfig
 
 	iface         *tuntap.Interface
 	peer          *VPNPeer
@@ -46,7 +46,7 @@ type CandyVPNClient struct {
 	finishAck     chan struct{} //清理时是主动发送FIN包，这个chan只是用来锁定是否收到的FIN的回应
 }
 
-func NewClient(cfg CandyVPNServerConfig) error {
+func NewClient(cfg VPNConfig) error {
 	var err error
 
 	hopClient := new(CandyVPNClient)

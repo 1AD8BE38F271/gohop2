@@ -24,7 +24,7 @@ import (
 
 func TestNewConfig(t *testing.T) {
 
-	config, err := NewCandyVPNServerConfig("../server.toml")
+	config, err := NewVPNConfig("../server.toml")
 	if err != nil {
 		t.Fatal(err)
 	}

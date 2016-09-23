@@ -38,7 +38,7 @@ const (
 
 
 type CandyVPNServer struct {
-	cfg        *CandyVPNServerConfig
+	cfg        *VPNConfig
 	peers      *VPNPeers
 	iface      *tuntap.Interface
 
@@ -49,7 +49,7 @@ type CandyVPNServer struct {
 	pktHandle  map[Protocol](func(*VPNPeer, *HopPacket))
 }
 
-func NewServer(cfg *CandyVPNServerConfig) (err error) {
+func NewServer(cfg *VPNConfig) (err error) {
 
 	log, err := logger.NewLogger(cfg.LogFile, cfg.LogLevel)
 	if err != nil {

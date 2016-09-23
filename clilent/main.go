@@ -16,3 +16,25 @@
  */
 
 package main
+
+import (
+	"flag"
+	"../vpn"
+)
+
+var cfgFile string
+
+func main() {
+	flag.StringVar(&cfgFile, "config", "config.toml", "configfile")
+	flag.Parse()
+
+	if cfgFile == "" {
+		cfgFile = flag.Arg(0)
+	}
+
+	config, err := vpn.NewCandyVPNServerConfig(cfgFile)
+	if err != nil {
+		panic(err)
+	}
+	vpn.NewClient(config)
+}

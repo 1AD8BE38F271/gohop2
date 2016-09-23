@@ -28,7 +28,7 @@ import (
 var log logger.Logger
 
 // Server Config
-type CandyVPNServerConfig struct {
+type VPNConfig struct {
 	Protocol    conn.TransProtocol `toml:"protocol"`
 	ServerAddr  string `toml:"server-addr"`
 	DNS         string `toml:"local-dns"`
@@ -43,7 +43,7 @@ type CandyVPNServerConfig struct {
 	LogLevel    logger.LogLevel `toml:"loglevel"`
 }
 
-func NewCandyVPNServerConfig(path string) (c *CandyVPNServerConfig, err error) {
+func NewVPNConfig(path string) (c *VPNConfig, err error) {
 
 	f, err := os.Open(path)
 	if err != nil {
@@ -54,7 +54,7 @@ func NewCandyVPNServerConfig(path string) (c *CandyVPNServerConfig, err error) {
 	if err != nil {
 		return
 	}
-	var config CandyVPNServerConfig
+	var config VPNConfig
 	if err = toml.Unmarshal(buf, &config); err != nil {
 		return
 	}
