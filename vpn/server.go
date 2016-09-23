@@ -265,7 +265,7 @@ func (srv *CandyVPNServer) handleHandshake(peer *VPNPeer, hp *HopPacket) {
 func (srv *CandyVPNServer) handleHandshakeAck(peer *VPNPeer, hp *HopPacket) {
 	log.Infof("Client %d Connected", peer.Ip)
 	if ok := atomic.CompareAndSwapInt32(&peer.state, HOP_STAT_HANDSHAKE, HOP_STAT_WORKING); ok {
-		peer.hsDone <- struct{}{}
+		close(peer.hsDone)
 	}
 }
 

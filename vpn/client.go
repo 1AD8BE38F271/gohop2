@@ -42,7 +42,6 @@ type CandyVPNClient struct {
 
 	pktHandle     map[Protocol]func(string, *HopPacket)
 
-	handshakeDone chan struct{}
 	finishAck     chan struct{} //清理时是主动发送FIN包，这个chan只是用来锁定是否收到的FIN的回应
 }
 
@@ -55,7 +54,6 @@ func NewClient(cfg VPNConfig) error {
 	hopClient.netStreams = NewPacketStreams()
 
 	hopClient.cfg = cfg
-	hopClient.handshakeDone = make(chan struct{})
 	hopClient.finishAck = make(chan struct{})
 
 	iface, err := tuntap.NewTUN("tun1")
@@ -91,7 +89,7 @@ func NewClient(cfg VPNConfig) error {
 	wait_handshake:
 	for {
 		select {
-		case <-hopClient.handshakeDone:
+		case <-hopClient.peer.hsDone:
 			break wait_handshake
 		}
 	}
@@ -184,7 +182,7 @@ func (clt *CandyVPNClient) handleConnection(streamKey string) {
 		for {
 			clt.handeshake()
 			select {
-			case <-clt.handshakeDone:
+			case <-clt.peer.hsDone:
 				return
 			case <-time.After(5 * time.Second):
 				log.Debug("Handshake timeout, retry")
@@ -197,7 +195,7 @@ func (clt *CandyVPNClient) handleConnection(streamKey string) {
 	go func(done  <- chan struct{}) {
 		for {
 			select {
-			case <-clt.handshakeDone:
+			case <-clt.peer.hsDone:
 				return
 			case <-time.After((clt.cfg.PeerTimeout / 2) * time.Second):
 				if clt.peer.state == HOP_STAT_WORKING {
@@ -239,11 +237,7 @@ func (clt *CandyVPNClient) ping() {
 func (clt *CandyVPNClient) handeshake() {
 	res := atomic.CompareAndSwapInt32(&clt.peer.state, HOP_STAT_INIT, HOP_STAT_HANDSHAKE)
 	if res {
-		clt.sendToServer(
-			&HandshakeAckPacket{
-				Ip:clt.peer.Ip,
-				MaskSize:0},
-		)
+		clt.sendToServer(&HandshakePacket{})
 	}
 }
 
@@ -267,6 +261,7 @@ func (clt *CandyVPNClient) handleHandshakeAck(stream string, hp *HopPacket) {
 		makeSize := hp.packet.(*HandshakeAckPacket).MaskSize
 		ipStr := fmt.Sprintf("%d.%d.%d.%d/%d", ip[0], ip[1], ip[2], ip[3], makeSize)
 		ip, subnet, _ := net.ParseCIDR(ipStr)
+		clt.peer.Ip = ip
 
 		err := clt.iface.SetupNetwork(ip, *subnet, clt.cfg.MTU)
 		if err != nil {
@@ -277,7 +272,7 @@ func (clt *CandyVPNClient) handleHandshakeAck(stream string, hp *HopPacket) {
 		if !res {
 			log.Errorf("Client state not expected: %d", clt.peer.state)
 		}
-		close(clt.handshakeDone)
+		close(clt.peer.hsDone)
 		clt.sendToServer(&HandshakeAckPacket{Ip:ip, MaskSize:makeSize})
 
 	} else if atomic.LoadInt32(&clt.peer.state) == HOP_STAT_WORKING {
