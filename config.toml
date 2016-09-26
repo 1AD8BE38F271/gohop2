@@ -1,6 +1,7 @@
 server-addr="163.44.165.223"
 local-dns="192.168.0.1"
-
+cipher=salsa20
+password="123456"
 addr="0.0.0.0"
 protocol="tcp"
 port-start = 40100

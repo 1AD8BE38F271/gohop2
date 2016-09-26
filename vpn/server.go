@@ -29,6 +29,7 @@ import (
 	"github.com/FTwOoO/vpncore/tcpip"
 	"github.com/FTwOoO/vpncore/tuntap"
 	"github.com/FTwOoO/go-logger"
+	"github.com/FTwOoO/go-enc"
 )
 
 const (
@@ -55,11 +56,6 @@ func NewServer(cfg *VPNConfig) (err error) {
 	if err != nil {
 		return
 	}
-
-	//cipher, err = enc.NewSalsa20BlockCrypt([]byte(cfg.Key))
-	//if err != nil {
-	//	return err
-	//}
 
 	hopServer := new(CandyVPNServer)
 	hopServer.netStreams = NewPacketStreams()
@@ -90,7 +86,7 @@ func NewServer(cfg *VPNConfig) (err error) {
 	hopServer.peers = NewVPNPeers(subnet, time.Duration(hopServer.cfg.PeerTimeout) * time.Second)
 
 	for port := cfg.PortStart; port <= cfg.PortEnd; port++ {
-		go hopServer.listen(cfg.Protocol, fmt.Sprintf("%s:%d", cfg.ListenAddr, port))
+		go hopServer.listen(cfg.Protocol, cfg.Cipher, cfg.Password, fmt.Sprintf("%s:%d", cfg.ListenAddr, port))
 	}
 
 	go hopServer.handleInterface()
@@ -127,8 +123,8 @@ func (srv *CandyVPNServer) handleInterface() {
 	}
 }
 
-func (srv *CandyVPNServer) listen(protocol conn.TransProtocol, addr string) {
-	l, err := conn.NewListener(protocol, addr)
+func (srv *CandyVPNServer) listen(protocol conn.TransProtocol, cipher enc.Cipher, pass string, addr string) {
+	l, err := conn.NewListener(protocol, addr, &enc.BlockConfig{Cipher:cipher, Password:pass})
 	if err != nil {
 		log.Errorf("Failed to listen on %s: %s", addr, err.Error())
 		return
