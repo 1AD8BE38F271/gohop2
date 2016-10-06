@@ -182,7 +182,7 @@ func (p *PacketStreams) Input(streamKey string, data []byte) (err error) {
 
 func (p *PacketStreams) Write(streamKey string, hp *HopPacket) (err error) {
 	stream, ok := p.Streams[streamKey]
-	if !ok {
+	if streamKey == "" || !ok {
 		return errors.New("No this stream!")
 	}
 

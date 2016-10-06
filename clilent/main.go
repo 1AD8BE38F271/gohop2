@@ -32,7 +32,7 @@ func main() {
 		cfgFile = flag.Arg(0)
 	}
 
-	config, err := vpn.NewCandyVPNServerConfig(cfgFile)
+	config, err := vpn.NewVPNConfig(cfgFile)
 	if err != nil {
 		panic(err)
 	}

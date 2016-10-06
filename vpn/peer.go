@@ -25,13 +25,12 @@ import (
 )
 
 type VPNPeer struct {
-	Id            uint32
-	Ip            net.IP
-	seq           uint32
-	state         int32
-	hsDone        chan struct{}
-	LastSeenTime  time.Time
-	activeStreams []string
+	Id           uint32
+	Ip           net.IP
+	seq          uint32
+	state        int32
+	hsDone       chan struct{}
+	LastSeenTime time.Time
 }
 
 func NewVPNPeer(id uint32, ip net.IP) *VPNPeer {
@@ -41,23 +40,8 @@ func NewVPNPeer(id uint32, ip net.IP) *VPNPeer {
 	hp.Id = id
 	hp.Ip = ip
 	hp.LastSeenTime = time.Now()
-	hp.activeStreams = make([]string, 0)
 	hp.hsDone = make(chan struct{})
-
 	return hp
-}
-
-func (peer *VPNPeer) AddStream(stream string) {
-	peer.activeStreams = append(peer.activeStreams, stream)
-}
-
-func (peer *VPNPeer) RandomStream() string {
-	index := rand.Intn(len(peer.activeStreams))
-	if index >= len(peer.activeStreams) {
-		return ""
-	}
-
-	return peer.activeStreams[index]
 }
 
 func (peer *VPNPeer) NextSeq() uint32 {
@@ -65,10 +49,11 @@ func (peer *VPNPeer) NextSeq() uint32 {
 }
 
 type VPNPeers struct {
-	IpPool      *IPPool
-	PeersByIp   map[string]*VPNPeer
-	PeerTimeout chan *VPNPeer
-	PeersByID   map[uint32]*VPNPeer
+	IpPool        *IPPool
+	PeersByIp     map[string]*VPNPeer
+	PeerTimeout   chan *VPNPeer
+	PeersByID     map[uint32]*VPNPeer
+	PeerToStreams map[*VPNPeer]map[string]bool
 }
 
 func NewVPNPeers(subnet *net.IPNet, timeout time.Duration) (vs *VPNPeers) {
@@ -76,11 +61,13 @@ func NewVPNPeers(subnet *net.IPNet, timeout time.Duration) (vs *VPNPeers) {
 	vs.IpPool = &IPPool{subnet:subnet}
 	vs.PeersByIp = map[string]*VPNPeer{}
 	vs.PeerTimeout = make(chan *VPNPeer)
+	vs.PeerToStreams = map[*VPNPeer]map[string]bool{}
+
 	go vs.checkTimeout(timeout)
 	return
 }
 
-func (vs *VPNPeers) NewPeer(id uint32, stream string) (peer *VPNPeer, err error) {
+func (vs *VPNPeers) NewPeer(id uint32) (peer *VPNPeer, err error) {
 	ipnet, err := vs.IpPool.Next()
 	if err != nil {
 		return
@@ -89,13 +76,44 @@ func (vs *VPNPeers) NewPeer(id uint32, stream string) (peer *VPNPeer, err error)
 	peer = NewVPNPeer(id, ipnet.IP)
 	vs.PeersByIp[peer.Ip.String()] = peer
 	vs.PeersByID[id] = peer
-	vs.AddStreamTo(stream, peer)
 	return
 }
 
 func (vs *VPNPeers) AddStreamTo(stream string, peer *VPNPeer) {
-	if _, ok := vs.PeersByIp[peer.Ip.String()]; ok {
-		peer.AddStream(stream)
+	if streams, ok := vs.PeerToStreams[peer]; ok {
+		streams[stream] = true
+	} else {
+		vs.PeerToStreams[peer] = map[string]bool{stream:true}
+	}
+}
+
+func GetRand(a map[string]bool) string {
+	// produce a pseudo-random number between 0 and len(a)-1
+	i := int(float32(len(a)) * rand.Float32())
+	for k, _ := range a {
+		if i == 0 {
+			return k
+		} else {
+			i--
+		}
+	}
+	panic("impossible")
+}
+
+func (vs *VPNPeers) RandomStreamFor(peer *VPNPeer) string {
+	if streams, ok := vs.PeerToStreams[peer]; ok {
+		return GetRand(streams)
+	} else {
+		return ""
+	}
+}
+
+func (vs *VPNPeers) DeleteStream(stream string) {
+	for _, peer := range vs.PeersByIp {
+		if streams, ok := vs.PeerToStreams[peer]; ok {
+			delete(streams, stream)
+			return
+		}
 	}
 }
 
@@ -103,6 +121,7 @@ func (vs *VPNPeers) DeletePeer(peer *VPNPeer) {
 	vs.IpPool.Release(peer.Ip)
 	delete(vs.PeersByIp, peer.Ip.String())
 	delete(vs.PeersByID, peer.Id)
+	delete(vs.PeerToStreams, peer)
 }
 
 func (vs *VPNPeers) checkTimeout(timeout time.Duration) {
@@ -114,4 +133,5 @@ func (vs *VPNPeers) checkTimeout(timeout time.Duration) {
 			vs.PeerTimeout <- peer
 		}
 	}
+
 }

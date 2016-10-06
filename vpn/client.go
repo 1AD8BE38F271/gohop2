@@ -30,28 +30,35 @@ import (
 	"time"
 	"github.com/FTwOoO/vpncore/tuntap"
 	"github.com/FTwOoO/vpncore/conn"
+	"github.com/FTwOoO/go-enc"
+	"github.com/FTwOoO/vpncore/routes"
+	"github.com/FTwOoO/vpncore/dns"
 )
 
 type CandyVPNClient struct {
-	cfg        VPNConfig
-
+	cfg        *VPNConfig
 	iface      *tuntap.Interface
+	router     *routes.RoutesManager
+	dnsManager *dns.DNSManager
+
 	peer       *VPNPeer
 	toIface    chan []byte
 	netStreams PacketStreams
-
 	pktHandle  map[Protocol]func(string, *HopPacket)
 
 	finishAck  chan struct{} //清理时是主动发送FIN包，这个chan只是用来锁定是否收到的FIN的回应
 }
 
-func NewClient(cfg VPNConfig) error {
+func NewClient(cfg *VPNConfig) error {
 	var err error
 
 	hopClient := new(CandyVPNClient)
 	hopClient.peer = NewVPNPeer(uint32(rand.Int31n(0xFFFFFF)), net.IP{0, 0, 0, 0})
 	hopClient.toIface = make(chan []byte, 128)
 	hopClient.netStreams = NewPacketStreams()
+	hopClient.router, _ = routes.NewRoutesManager()
+	hopClient.dnsManager = new(dns.DNSManager)
+
 
 	hopClient.cfg = cfg
 	hopClient.finishAck = make(chan struct{})
@@ -68,22 +75,21 @@ func NewClient(cfg VPNConfig) error {
 
 	for port := cfg.PortStart; port <= cfg.PortEnd; port++ {
 		server := fmt.Sprintf("%s:%d", cfg.ServerAddr, port)
-		connection, err := hopClient.connect(cfg.Protocol, server)
+		blockConfig := &enc.BlockConfig{Cipher:cfg.Cipher, Password:cfg.Password}
+		connection, err := conn.Dial(cfg.Protocol, server, blockConfig)
 
 		if err != nil {
 			continue
 		} else {
-			hopClient.iface.Router().AddRouteToHost(
-				hopClient.iface.DefaultNic(),
+			hopClient.router.AddRouteToHost(
+				hopClient.router.DefaultNic,
 				net.ParseIP(cfg.ServerAddr),
-				hopClient.iface.DefaultGateway())
+				hopClient.router.DefaultGateway)
 
 			streamKey, _ := hopClient.netStreams.AddConnection(connection)
-			hopClient.peer.AddStream(streamKey)
 			go hopClient.handleConnection(streamKey)
 		}
 	}
-
 
 	wait_handshake:
 	for {
@@ -93,16 +99,22 @@ func NewClient(cfg VPNConfig) error {
 		}
 	}
 
-	err = iface.ClientRedirectGateway()
+	err = hopClient.router.SetNewGateway(hopClient.iface.Name(), hopClient.iface.IP())
 	if err != nil {
 		return err
 	}
+
 	if cfg.DNS != "" {
 		dnsl := []net.IP{net.ParseIP(cfg.DNS)}
-		err = iface.ClientSetupNewDNS(dnsl)
+		err = hopClient.dnsManager.SetupNewDNS(dnsl)
 		if err != nil {
 			return err
 		}
+
+		for _, dns_ip := range dnsl {
+			hopClient.router.AddRouteToHost(hopClient.iface.Name(), dns_ip, hopClient.iface.IP())
+		}
+
 	}
 
 	go hopClient.forwardFrames()
@@ -158,15 +170,6 @@ func (clt *CandyVPNClient) forwardFrames() {
 	}
 }
 
-func (clt *CandyVPNClient) connect(proto conn.TransProtocol, serverAddr string) (connection net.Conn, err error) {
-	connection, err = conn.Dial(proto, serverAddr)
-	if err != nil {
-		return
-	}
-
-	return
-}
-
 func (clt *CandyVPNClient) handleConnection(streamKey string) {
 
 	_, ok := clt.netStreams.Streams[streamKey]
@@ -218,7 +221,20 @@ func (clt *CandyVPNClient) handleConnection(streamKey string) {
 
 func (clt *CandyVPNClient) sendToServer(p AppPacket) {
 	hp := NewHopPacket(clt.peer, p)
-	clt.netStreams.Write(clt.peer.RandomStream(), hp)
+
+	//random stream
+	stream := ""
+	i := int(float32(len(clt.netStreams.Streams)) * rand.Float32())
+	for k, _ := range clt.netStreams.Streams {
+		if i == 0 {
+			stream = k
+			break
+		} else {
+			i--
+		}
+	}
+
+	clt.netStreams.Write(stream, hp)
 }
 
 func (clt *CandyVPNClient) ping() {
@@ -304,6 +320,8 @@ func (clt *CandyVPNClient) cleanUp() {
 		log.Info("Timeout, give up")
 	}
 
-	clt.iface.Destroy()
+	clt.iface.Close()
+	clt.dnsManager.RestoreDNS()
+	clt.router.Destroy()
 	os.Exit(0)
 }

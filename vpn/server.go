@@ -37,7 +37,6 @@ const (
 	BUF_SIZE = 2048
 )
 
-
 type CandyVPNServer struct {
 	cfg        *VPNConfig
 	peers      *VPNPeers
@@ -58,10 +57,11 @@ func NewServer(cfg *VPNConfig) (err error) {
 	}
 
 	hopServer := new(CandyVPNServer)
-	hopServer.netStreams = NewPacketStreams()
+
 	hopServer.fromIface = make(chan []byte, BUF_SIZE)
 	hopServer.toIface = make(chan []byte, BUF_SIZE * 4)
 	hopServer.peers = new(VPNPeers)
+	hopServer.netStreams = NewPacketStreams()
 	hopServer.cfg = cfg
 
 	iface, err := tuntap.NewTUN("tun1")
@@ -191,12 +191,16 @@ func (srv *CandyVPNServer) forwardFrames() {
 				peer, found = srv.peers.PeersByID[hPack.Sid]
 
 				if !found && hPack.Proto == HOP_FLG_HSH {
-					peer, err = srv.peers.NewPeer(hPack.Sid, inPacket.stream)
+					peer, err = srv.peers.NewPeer(hPack.Sid)
 					if err != nil {
 						log.Errorf("Cant alloc IP from pool %v", err)
 					}
+					srv.peers.AddStreamTo(inPacket.stream, peer)
+
 				} else if !found {
 					continue
+				} else {
+					srv.peers.AddStreamTo(inPacket.stream, peer)
 				}
 
 				peer.LastSeenTime = time.Now()
@@ -215,7 +219,14 @@ func (srv *CandyVPNServer) forwardFrames() {
 func (srv *CandyVPNServer) SendToClient(peer *VPNPeer, p AppPacket) {
 	hp := NewHopPacket(peer, p)
 	log.Debugf("peer: %v", peer)
-	srv.netStreams.Write(peer.RandomStream(), hp)
+	stream := srv.peers.RandomStreamFor(peer)
+	err := srv.netStreams.Write(stream, hp)
+	if err != nil {
+		srv.peers.DeleteStream(stream)
+		srv.netStreams.Close(stream)
+		log.Debugf("%s", err)
+	}
+
 }
 
 func (srv *CandyVPNServer) handlePing(hpeer *VPNPeer, hp *HopPacket) {
