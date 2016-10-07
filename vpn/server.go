@@ -86,7 +86,7 @@ func NewServer(cfg *VPNConfig) (err error) {
 	hopServer.peers = NewVPNPeers(subnet, time.Duration(hopServer.cfg.PeerTimeout) * time.Second)
 
 	for port := cfg.PortStart; port <= cfg.PortEnd; port++ {
-		go hopServer.listen(cfg.Protocol, cfg.Cipher, cfg.Password, fmt.Sprintf("%s:%d", cfg.ListenAddr, port))
+		go hopServer.listen(cfg.Protocol, enc.Cipher(cfg.Cipher), cfg.Password, fmt.Sprintf("%s:%d", cfg.ListenAddr, port))
 	}
 
 	go hopServer.handleInterface()

@@ -20,7 +20,7 @@ package main
 
 import (
 	"flag"
-	"../vpn"
+	"github.com/FTwOoO/gohop2/vpn"
 )
 
 var cfgFile string

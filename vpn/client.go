@@ -75,7 +75,7 @@ func NewClient(cfg *VPNConfig) error {
 
 	for port := cfg.PortStart; port <= cfg.PortEnd; port++ {
 		server := fmt.Sprintf("%s:%d", cfg.ServerAddr, port)
-		blockConfig := &enc.BlockConfig{Cipher:cfg.Cipher, Password:cfg.Password}
+		blockConfig := &enc.BlockConfig{Cipher:enc.Cipher(cfg.Cipher), Password:cfg.Password}
 		connection, err := conn.Dial(cfg.Protocol, server, blockConfig)
 
 		if err != nil {

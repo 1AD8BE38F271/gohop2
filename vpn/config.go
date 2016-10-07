@@ -23,7 +23,6 @@ import (
 	"github.com/FTwOoO/go-logger"
 	"github.com/FTwOoO/vpncore/conn"
 	"time"
-	"github.com/FTwOoO/go-enc"
 )
 
 var log logger.Logger
@@ -31,7 +30,7 @@ var log logger.Logger
 // Server Config
 type VPNConfig struct {
 	Protocol    conn.TransProtocol `toml:"protocol"`
-	Cipher      enc.Cipher `toml:"cipher"`
+	Cipher      string `toml:"cipher"`
 	Password    string `toml:"password"`
 	ServerAddr  string `toml:"server-addr"`
 	DNS         string `toml:"local-dns"`
