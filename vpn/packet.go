@@ -62,7 +62,6 @@ type AppPacket interface {
 type HandshakePacket struct{}
 
 func (p *HandshakePacket) Pack() []byte {
-	panic("Not implemented")
 	return []byte{}
 }
 
@@ -84,12 +83,21 @@ type HandshakeAckPacket struct {
 }
 
 func (p *HandshakeAckPacket) Pack() []byte {
-	buf := bytes.NewBuffer(make([]byte, 0, binary.Size(p)))
+	buf := bytes.NewBuffer(make([]byte, 0, 16))
 	binary.Write(buf, binary.BigEndian, p)
 	return buf.Bytes()
 }
 
-func (p *HandshakeAckPacket) Unpack(buf *bytes.Buffer) error {
+func (p *HandshakeAckPacket) Unpack(buf *bytes.Buffer) (err error) {
+
+	if err = binary.Read(buf, binary.BigEndian, &p.Ip); err != nil {
+		return
+	}
+
+	if err = binary.Read(buf, binary.BigEndian, &p.MaskSize); err != nil {
+		return
+	}
+
 	return nil
 }
 func (p *HandshakeAckPacket) Protocol() Protocol {
@@ -187,7 +195,7 @@ func (p *DataPacket) Unpack(buf *bytes.Buffer) error {
 func (p *DataPacket) Pack() []byte {
 	p.Dlen = uint16(len(p.Payload))
 
-	buf := bytes.NewBuffer(make([]byte, 0, 4 + p.Dlen))
+	buf := bytes.NewBuffer(make([]byte, 0, 8 + p.Dlen))
 	binary.Write(buf, binary.BigEndian, p.Dlen)
 	binary.Write(buf, binary.BigEndian, p.Payload)
 	return buf.Bytes()

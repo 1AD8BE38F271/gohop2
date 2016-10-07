@@ -31,7 +31,7 @@ var needMoreData = errors.New("need more data")
 type Stream struct {
 	Connection net.Conn
 	InBuf      []byte
-	Len        uint
+	Len        uint32
 }
 
 func NewStream(c net.Conn) *Stream {
@@ -50,32 +50,32 @@ func (s *Stream) Input(data []byte) error {
 	}
 
 	copy(s.InBuf[s.Len:], data)
-	s.Len += uint(len(data))
+	s.Len += uint32(len(data))
 	return nil
 }
 
 func (s *Stream) Unpack() (p *HopPacket, err error) {
-	p, remainBytes, err := s.tryUnpackHopPacket(s.InBuf)
+	p, remainBytes, err := s.tryUnpackHopPacket()
 	if err != nil && err != needMoreData {
 		return
 	}
 
 	if remainBytes > 0 {
-		copy(s.InBuf[:], s.InBuf[uint(s.Len) - remainBytes:])
+		copy(s.InBuf[:], s.InBuf[s.Len - remainBytes:])
 		s.Len = remainBytes
 	} else {
 		s.Len = 0
 	}
 
-	return
+	return nil, needMoreData
 }
 
-func (s *Stream) tryUnpackHopPacket(b []byte) (p *HopPacket, remainBytes uint, err error) {
-	if uint32(len(b)) < p.HeaderSize() + p.Dlen {
+func (s *Stream) tryUnpackHopPacket() (p *HopPacket, remainBytes uint32, err error) {
+	if s.Len < 16 {
 		return nil, 0, needMoreData
 	}
 
-	buf := bytes.NewBuffer(b)
+	buf := bytes.NewBuffer(s.InBuf[:s.Len])
 	p = new(HopPacket)
 
 	if err = binary.Read(buf, binary.BigEndian, &p.Sid); err != nil {
@@ -94,16 +94,35 @@ func (s *Stream) tryUnpackHopPacket(b []byte) (p *HopPacket, remainBytes uint, e
 		return
 	}
 
+	if s.Len < 16 + p.Dlen {
+		return nil, 0, needMoreData
+	}
+
 	var datapacket AppPacket
 	if p.Proto == HOP_FLG_HSH {
 		datapacket = new(HandshakePacket)
+	}else if p.Proto == HOP_FLG_FIN {
+		datapacket = new(FinPacket)
+	} else if p.Proto == HOP_FLG_PING {
+		datapacket = new(PingPacket)
+	} else if p.Proto == HOP_FLG_DAT {
+		datapacket = new(DataPacket)
+	} else if p.Proto == HOP_FLG_HSH_ACK {
+		datapacket = new(HandshakeAckPacket)
+	} else if p.Proto == HOP_FLG_HSH_ERR {
+
+	} else if p.Proto == HOP_FLG_FIN_ACK {
+		datapacket = new(FinAckPacket)
+	} else if p.Proto == HOP_FLG_DAT_ACK {
+	} else {
+		return nil, 0, errors.New("Error Proto flag!")
 	}
 
 	if err = datapacket.Unpack(buf); err != nil {
 		return
 	}
 
-	remainBytes = (uint)(buf.Len())
+	remainBytes = (uint32)(buf.Len())
 	return p, remainBytes, nil
 }
 

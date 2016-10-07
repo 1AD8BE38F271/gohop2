@@ -205,6 +205,7 @@ func (srv *CandyVPNServer) forwardFrames() {
 
 				peer.LastSeenTime = time.Now()
 				if handle_func != nil {
+					fmt.Printf("Got a packet %v", hPack)
 					handle_func(peer, hPack)
 				}
 

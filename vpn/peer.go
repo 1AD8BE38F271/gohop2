@@ -60,6 +60,7 @@ func NewVPNPeers(subnet *net.IPNet, timeout time.Duration) (vs *VPNPeers) {
 	vs = new(VPNPeers)
 	vs.IpPool = &IPPool{subnet:subnet}
 	vs.PeersByIp = map[string]*VPNPeer{}
+	vs.PeersByID =  map[uint32]*VPNPeer{}
 	vs.PeerTimeout = make(chan *VPNPeer)
 	vs.PeerToStreams = map[*VPNPeer]map[string]bool{}
 

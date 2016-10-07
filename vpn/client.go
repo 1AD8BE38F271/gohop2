@@ -63,22 +63,20 @@ func NewClient(cfg *VPNConfig) error {
 	hopClient.cfg = cfg
 	hopClient.finishAck = make(chan struct{})
 
-	iface, err := tuntap.NewTUN("tun1")
-	if err != nil {
-		return err
-	}
-	hopClient.iface = iface
-
+	iface, err := tuntap.NewTUN("tun2")
 	if err != nil {
 		panic(err)
 	}
+	hopClient.iface = iface
 
 	for port := cfg.PortStart; port <= cfg.PortEnd; port++ {
 		server := fmt.Sprintf("%s:%d", cfg.ServerAddr, port)
+		fmt.Printf("Connecting to server %s ...\n", server)
 		blockConfig := &enc.BlockConfig{Cipher:enc.Cipher(cfg.Cipher), Password:cfg.Password}
 		connection, err := conn.Dial(cfg.Protocol, server, blockConfig)
 
 		if err != nil {
+			fmt.Println(err)
 			continue
 		} else {
 			hopClient.router.AddRouteToHost(
@@ -163,6 +161,7 @@ func (clt *CandyVPNClient) forwardFrames() {
 	for {
 		inp := <-clt.netStreams.InPackets
 		if handle_func, ok := clt.pktHandle[inp.hp.Proto]; ok {
+			fmt.Printf("Got a packet %v", inp.hp)
 			handle_func(inp.stream, inp.hp)
 		} else {
 			log.Errorf("Unkown flag: %x", inp.hp.Proto)
@@ -196,8 +195,6 @@ func (clt *CandyVPNClient) handleConnection(streamKey string) {
 	go func(done  <- chan struct{}) {
 		for {
 			select {
-			case <-clt.peer.hsDone:
-				return
 			case <-time.After((clt.cfg.PeerTimeout / 2) * time.Second):
 				if clt.peer.state == HOP_STAT_WORKING {
 					clt.ping()
