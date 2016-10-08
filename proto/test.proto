@@ -1,0 +1,8 @@
+syntax = "proto3";
+package protodef;
+
+message TestPacket {
+      uint32 sid= 1;
+	  bool mark= 2;
+	  map<string, uint64> Sessions = 3;
+}

@@ -8,10 +8,12 @@ Package protodef is a generated protocol buffer package.
 It is generated from these files:
 	handshake.proto
 	header.proto
+	test.proto
 
 It has these top-level messages:
 	HandshakeRequest
 	PacketHeader
+	TestPacket
 */
 package protodef
 

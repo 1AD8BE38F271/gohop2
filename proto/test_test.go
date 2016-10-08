@@ -20,19 +20,21 @@ package protodef
 import (
 	"github.com/golang/protobuf/proto"
 	"testing"
+	"reflect"
 )
 
 func TestPacketHeader(t *testing.T) {
-	test := &PacketHeader{
-		Seq: 1,
+	test := &TestPacket{
+		Mark: false,
 		Sid:  999,
+		Sessions: map[string]uint64{"a":1, "b":2},
 
 	}
 	data, err := proto.Marshal(test)
 	if err != nil {
 		t.Fatal("marshaling error: ", err)
 	}
-	newTest := &PacketHeader{}
+	newTest := &TestPacket{}
 	err = proto.Unmarshal(data, newTest)
 	if err != nil {
 		t.Fatal("unmarshaling error: ", err)
@@ -41,7 +43,11 @@ func TestPacketHeader(t *testing.T) {
 	if test.Sid != newTest.Sid {
 		t.Fatalf("data mismatch %q != %q", test.Sid, newTest.Sid)
 	}
-	if test.Seq != newTest.Seq {
-		t.Fatalf("data mismatch %q != %q", test.Seq, newTest.Seq)
+	if test.Mark != newTest.Mark {
+		t.Fatalf("data mismatch %q != %q", test.Mark, newTest.Mark)
+	}
+
+	if !reflect.DeepEqual(test.Sessions, newTest.Sessions) {
+		t.Fatal("Sessions dont mismatch")
 	}
 }
