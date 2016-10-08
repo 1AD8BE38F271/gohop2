@@ -1,0 +1,7 @@
+syntax = "proto3";
+package protodef;
+
+message PacketHeader {
+      uint32 Sid= 1;
+	  uint32 Seq= 3;
+}

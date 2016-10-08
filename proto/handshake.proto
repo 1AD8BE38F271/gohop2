@@ -1,0 +1,12 @@
+syntax = "proto3";
+package protodef;
+import "header.proto";
+
+message HandshakeRequest {
+  PacketHeader header = 1;
+  string query = 2;
+  int32 page_number = 3;
+  int32 result_per_page = 4;
+}
+
+
