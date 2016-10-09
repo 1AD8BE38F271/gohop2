@@ -31,3 +31,17 @@ func CreateServer(tranProtocol conn.TransProtocol, address string, cipher enc.Ci
 
 	return link.NewServer(listener, codecProtocol, sessionSendChanSize), nil
 }
+
+
+
+func Connect(tranProtocol conn.TransProtocol, address string, cipher enc.Cipher, pass string, codecProtocol link.Protocol, sessionSendChanSize int) (*link.Session, error) {
+	c, err := conn.Dial(tranProtocol, address, &enc.BlockConfig{Cipher:cipher, Password:pass})
+	if err != nil {
+		return nil, nil, err
+	}
+	codec, ctx, err := codecProtocol.NewCodec(c)
+	if err != nil {
+		return nil, nil, err
+	}
+	return link.NewSession(codec, sessionSendChanSize),  nil
+}

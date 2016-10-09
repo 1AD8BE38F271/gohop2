@@ -28,11 +28,16 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
-	"github.com/FTwOoO/vpncore/tuntap"
-	"github.com/FTwOoO/vpncore/conn"
-	"github.com/FTwOoO/vpncore/enc"
-	"github.com/FTwOoO/vpncore/routes"
 	"github.com/FTwOoO/vpncore/dns"
+	"github.com/FTwOoO/vpncore/tuntap"
+	"github.com/FTwOoO/vpncore/enc"
+	"github.com/FTwOoO/link/codec"
+	"github.com/FTwOoO/link"
+	"github.com/FTwOoO/vpncore/routes"
+	"github.com/FTwOoO/gohop2/protodef"
+	"reflect"
+	"github.com/golang/protobuf/proto"
+	"encoding/binary"
 )
 
 type CandyVPNClient struct {
@@ -40,6 +45,7 @@ type CandyVPNClient struct {
 	iface      *tuntap.Interface
 	router     *routes.RoutesManager
 	dnsManager *dns.DNSManager
+	sessions   []*link.Session
 
 	peer       *VPNPeer
 	toIface    chan []byte
@@ -55,7 +61,7 @@ func NewClient(cfg *VPNConfig) error {
 	hopClient.toIface = make(chan []byte, 128)
 	hopClient.router, _ = routes.NewRoutesManager()
 	hopClient.dnsManager = new(dns.DNSManager)
-
+	hopClient.sessions = []*link.Session{}
 
 	hopClient.cfg = cfg
 	hopClient.finishAck = make(chan struct{})
@@ -66,30 +72,32 @@ func NewClient(cfg *VPNConfig) error {
 	}
 	hopClient.iface = iface
 
-	for port := cfg.PortStart; port <= cfg.PortEnd; port++ {
-		server := fmt.Sprintf("%s:%d", cfg.ServerAddr, port)
-		fmt.Printf("Connecting to server %s ...\n", server)
-		blockConfig := &enc.BlockConfig{Cipher:enc.Cipher(cfg.Cipher), Password:cfg.Password}
-		connection, err := conn.Dial(cfg.Protocol, server, blockConfig)
+	serverAddr := fmt.Sprintf("%s:%d", cfg.ServerAddr, cfg.ServerPort)
+	fmt.Printf("Connecting to server %s ...\n", serverAddr)
+	session, err := Connect(
+		cfg.Protocol,
+		serverAddr,
+		enc.Cipher(cfg.Cipher),
+		cfg.Password,
+		codec.NewProtobufProtocol(hopClient, []string{}),
+		0x100)
 
-		if err != nil {
-			fmt.Println(err)
-			continue
-		} else {
-			hopClient.router.AddRouteToHost(
-				hopClient.router.DefaultNic,
-				net.ParseIP(cfg.ServerAddr),
-				hopClient.router.DefaultGateway)
-
-			streamKey, _ := hopClient.netStreams.AddConnection(connection)
-			go hopClient.handleConnection(streamKey)
-		}
+	if err != nil {
+		panic(err)
 	}
+
+	hopClient.router.AddRouteToHost(
+		hopClient.router.DefaultNic,
+		net.ParseIP(cfg.ServerAddr),
+		hopClient.router.DefaultGateway)
+
+	go hopClient.handleConnection(session)
+	append(hopClient.sessions, session)
 
 	wait_handshake:
 	for {
 		select {
-		case <-hopClient.peer.hsDone:
+		case <-hopClient.peer.HandshakeDone:
 			break wait_handshake
 		}
 	}
@@ -109,10 +117,8 @@ func NewClient(cfg *VPNConfig) error {
 		for _, dns_ip := range dnsl {
 			hopClient.router.AddRouteToHost(hopClient.iface.Name(), dns_ip, hopClient.iface.IP())
 		}
-
 	}
 
-	go hopClient.forwardFrames()
 	go hopClient.handleInterface()
 	hopClient.cleanUp()
 
@@ -140,29 +146,11 @@ func (clt *CandyVPNClient) handleInterface() {
 		}
 		buf := make([]byte, n)
 		copy(buf, frame)
-		clt.sendToServer(&DataPacket{Payload:buf})
+		clt.sendToServer(&protodef.Data{Payload:buf}, nil)
 	}
 }
 
-func (clt *CandyVPNClient) forwardFrames() {
-
-	for {
-		inp := <-clt.netStreams.InPackets
-		if handle_func, ok := clt.pktHandle[inp.hp.Proto]; ok {
-			fmt.Printf("Got a packet %v", inp.hp)
-			handle_func(inp.stream, inp.hp)
-		} else {
-			log.Errorf("Unkown flag: %x", inp.hp.Proto)
-		}
-	}
-}
-
-func (clt *CandyVPNClient) handleConnection(streamKey string) {
-
-	_, ok := clt.netStreams.Streams[streamKey]
-	if !ok {
-		return
-	}
+func (clt *CandyVPNClient) handleConnection(session *link.Session) {
 
 	connectionDone := make(chan struct{}, 1)
 
@@ -170,7 +158,7 @@ func (clt *CandyVPNClient) handleConnection(streamKey string) {
 		for {
 			clt.handeshake()
 			select {
-			case <-clt.peer.hsDone:
+			case <-clt.peer.HandshakeDone:
 				return
 			case <-time.After(5 * time.Second):
 				log.Debug("Handshake timeout, retry")
@@ -184,7 +172,7 @@ func (clt *CandyVPNClient) handleConnection(streamKey string) {
 		for {
 			select {
 			case <-time.After((clt.cfg.PeerTimeout / 2) * time.Second):
-				if clt.peer.state == HOP_STAT_WORKING {
+				if clt.peer.State == HOP_STAT_WORKING {
 					clt.ping()
 				}
 			case <-done:
@@ -194,97 +182,98 @@ func (clt *CandyVPNClient) handleConnection(streamKey string) {
 	}(connectionDone)
 
 	for {
-		err := clt.netStreams.Read(streamKey)
+		rsp, err := session.Receive()
 		if err != nil {
 			log.Error(err.Error())
-			close(connectionDone)
-			clt.netStreams.Close(streamKey)
 			return
 		}
-	}
-}
 
-func (clt *CandyVPNClient) sendToServer(p AppPacket) {
-	hp := NewHopPacket(clt.peer, p)
+		switch rsp.(type) {
+		case protodef.Handshake:
 
-	//random stream
-	stream := ""
-	i := int(float32(len(clt.netStreams.Streams)) * rand.Float32())
-	for k, _ := range clt.netStreams.Streams {
-		if i == 0 {
-			stream = k
-			break
-		} else {
-			i--
+		case protodef.Ping:
+			clt.sendToServer(&protodef.PingAck{}, session)
+
+		case protodef.Data:
+			if clt.peer.State == HOP_STAT_WORKING {
+				clt.toIface <- (rsp.(*protodef.Data)).Payload
+			}
+		case protodef.Fin:
+			pid := os.Getpid()
+			syscall.Kill(pid, syscall.SIGTERM)
+
+		case protodef.HandshakeAck:
+			if atomic.LoadInt32(&clt.peer.State) == HOP_STAT_HANDSHAKE {
+
+				ipV := rsp.(*protodef.HandshakeAck).Ip
+				ip := make([]byte, 4)
+				binary.BigEndian.PutUint32(ip, ipV)
+				makeSize := rsp.(*protodef.HandshakeAck).MarkSize
+				ipStr := fmt.Sprintf("%d.%d.%d.%d/%d", ip[0], ip[1], ip[2], ip[3], makeSize)
+				ip, subnet, _ := net.ParseCIDR(ipStr)
+				clt.peer.Ip = ip
+
+				err := clt.iface.SetupNetwork(ip, *subnet, clt.cfg.MTU)
+				if err != nil {
+					panic(err)
+				}
+
+				res := atomic.CompareAndSwapInt32(&clt.peer.State, HOP_STAT_HANDSHAKE, HOP_STAT_WORKING)
+				if !res {
+					log.Errorf("Client state not expected: %d", clt.peer.State)
+				}
+				close(clt.peer.HandshakeDone)
+				clt.sendToServer(rsp, session)
+
+			} else if atomic.LoadInt32(&clt.peer.State) == HOP_STAT_WORKING {
+				clt.sendToServer(rsp, session)
+			}
+
+		case protodef.PingAck:
+		case protodef.DataAck:
+		case protodef.FinAck:
+			clt.finishAck <- struct{}{}
+
+		default:
+			log.Errorf("Message type %s that server dont support yet!\n", reflect.TypeOf(rsp))
 		}
 	}
-
-	clt.netStreams.Write(stream, hp)
 }
 
 func (clt *CandyVPNClient) ping() {
-	clt.sendToServer(new(PingPacket))
+	clt.sendToServer(&protodef.Ping{}, nil)
 }
 
 func (clt *CandyVPNClient) handeshake() {
-	res := atomic.CompareAndSwapInt32(&clt.peer.state, HOP_STAT_INIT, HOP_STAT_HANDSHAKE)
+	res := atomic.CompareAndSwapInt32(&clt.peer.State, HOP_STAT_INIT, HOP_STAT_HANDSHAKE)
 	if res {
-		clt.sendToServer(&HandshakePacket{})
+		clt.sendToServer(&protodef.Handshake{}, nil)
 	}
 }
 
 func (clt *CandyVPNClient) finishSession() {
-	atomic.StoreInt32(&clt.peer.state, HOP_STAT_FIN)
-	clt.sendToServer(new(FinPacket))
+	atomic.StoreInt32(&clt.peer.State, HOP_STAT_FIN)
+	clt.sendToServer(&protodef.Fin{}, nil)
 }
 
-func (clt *CandyVPNClient) handlePingAck(stream string, hp *HopPacket) {
-	return
-}
-
-func (clt *CandyVPNClient) handlePing(stream string, hp *HopPacket) {
-	clt.sendToServer(new(PingAckPacket))
-}
-
-func (clt *CandyVPNClient) handleHandshakeAck(stream string, hp *HopPacket) {
-	if atomic.LoadInt32(&clt.peer.state) == HOP_STAT_HANDSHAKE {
-
-		ip := hp.packet.(*HandshakeAckPacket).Ip
-		makeSize := hp.packet.(*HandshakeAckPacket).MaskSize
-		ipStr := fmt.Sprintf("%d.%d.%d.%d/%d", ip[0], ip[1], ip[2], ip[3], makeSize)
-		ip, subnet, _ := net.ParseCIDR(ipStr)
-		clt.peer.Ip = ip
-
-		err := clt.iface.SetupNetwork(ip, *subnet, clt.cfg.MTU)
-		if err != nil {
-			panic(err)
-		}
-
-		res := atomic.CompareAndSwapInt32(&clt.peer.state, HOP_STAT_HANDSHAKE, HOP_STAT_WORKING)
-		if !res {
-			log.Errorf("Client state not expected: %d", clt.peer.state)
-		}
-		close(clt.peer.hsDone)
-		clt.sendToServer(&HandshakeAckPacket{Ip:ip, MaskSize:makeSize})
-
-	} else if atomic.LoadInt32(&clt.peer.state) == HOP_STAT_WORKING {
-		clt.sendToServer(hp.packet.(*HandshakeAckPacket))
+func (clt *CandyVPNClient) sendToServer(msg proto.Message, session *link.Session) error {
+	if session != nil {
+		return session.Send(msg)
 	}
-}
 
-func (clt *CandyVPNClient) handleDataPacket(stream string, hp *HopPacket) {
-	if clt.peer.state == HOP_STAT_WORKING {
-		clt.toIface <- (hp.packet.(*DataPacket)).Payload
+	for _, session := range clt.sessions {
+		if session != nil {
+			err := session.Send(msg)
+			if err != nil {
+				log.Error(err.Error())
+				continue
+			}
+			return nil
+		}
 	}
-}
 
-func (clt *CandyVPNClient) handleFinishAck(stream string, hp *HopPacket) {
-	clt.finishAck <- struct{}{}
-}
+	return fmt.Errorf("Send msg fail: %v", msg)
 
-func (clt *CandyVPNClient) handleFinish(stream string, hp *HopPacket) {
-	pid := os.Getpid()
-	syscall.Kill(pid, syscall.SIGTERM)
 }
 
 func (clt *CandyVPNClient) cleanUp() {
@@ -294,7 +283,7 @@ func (clt *CandyVPNClient) cleanUp() {
 
 	log.Info("Cleaning Up")
 
-	if clt.peer.state != HOP_STAT_INIT {
+	if clt.peer.State != HOP_STAT_INIT {
 		clt.finishSession()
 	}
 

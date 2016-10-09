@@ -25,28 +25,32 @@ import (
 )
 
 type VPNPeer struct {
-	Sid          uint32
-	Ip           net.IP
+	Sid           uint32
+	Ip            net.IP
 
-	seq          uint32
-	state        int32
-	hsDone       chan struct{}
-	LastSeenTime time.Time
+	seq           uint32
+	State         int32
+	HandshakeDone chan struct{}
+	LastSeenTime  time.Time
 }
 
 func NewVPNPeer(sid uint32, ip net.IP) *VPNPeer {
 	hp := new(VPNPeer)
-	hp.state = HOP_STAT_INIT
+	hp.State = HOP_STAT_INIT
 	hp.seq = 0
 	hp.Sid = sid
 	hp.Ip = ip
 	hp.LastSeenTime = time.Now()
-	hp.hsDone = make(chan struct{})
+	hp.HandshakeDone = make(chan struct{})
 	return hp
 }
 
 func (peer *VPNPeer) NextSeq() uint32 {
 	return atomic.AddUint32(&peer.seq, 1)
+}
+
+func (peer *VPNPeer) Touch() {
+	peer.LastSeenTime = time.Now()
 }
 
 type VPNPeersManager struct {
@@ -67,13 +71,16 @@ func NewVPNPeers(subnet *net.IPNet, timeout time.Duration) (vs *VPNPeersManager)
 	vs.IpPool = &IPPool{subnet:subnet}
 	vs.peerByIp = map[string]*VPNPeer{}
 	vs.peerBySid = map[uint32]*VPNPeer{}
-	vs.PeerTimeout = make(chan *VPNPeer)
+	vs.PeerTimeout = make(chan *VPNPeer, 100)
 
 	go vs.checkTimeout(timeout)
 	return
 }
 
 func (vs *VPNPeersManager) checkTimeout(timeout time.Duration) {
+	vs.peerLock.RLock()
+	defer vs.peerLock.RUnlock()
+
 	for _, peer := range vs.peerByIp {
 		log.Debugf("watch: %v", peer.LastSeenTime)
 		conntime := time.Since(peer.LastSeenTime)

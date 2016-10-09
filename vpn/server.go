@@ -35,6 +35,7 @@ import (
 	"github.com/FTwOoO/gohop2/protodef"
 	"reflect"
 	"github.com/golang/protobuf/proto"
+	"encoding/binary"
 )
 
 const (
@@ -122,19 +123,7 @@ func (srv *CandyVPNServer) handleInterface() {
 	}
 }
 
-func (srv *CandyVPNServer) listen(protocol conn.TransProtocol, cipher enc.Cipher, pass string, addr string) {
-	var err error
-	srv.server, err = CreateServer(protocol, addr, cipher, pass, codec.NewProtobufProtocol(srv, []string{}), 0x1000)
-	if err != nil {
-		log.Errorf("Failed to listen on %s: %s", addr, err.Error())
-		os.Exit(0)
-	}
-
-	go srv.server.Serve(link.HandlerFunc(sessionLoop))
-}
-
 func (srv *CandyVPNServer) forwardFrames() {
-	TOP:
 	for {
 		select {
 		case pack := <-srv.fromIface:
@@ -154,6 +143,17 @@ func (srv *CandyVPNServer) forwardFrames() {
 	}
 }
 
+func (srv *CandyVPNServer) listen(protocol conn.TransProtocol, cipher enc.Cipher, pass string, addr string) {
+	var err error
+	srv.server, err = CreateServer(protocol, addr, cipher, pass, codec.NewProtobufProtocol(srv, []string{}), 0x1000)
+	if err != nil {
+		log.Errorf("Failed to listen on %s: %s", addr, err.Error())
+		os.Exit(0)
+	}
+
+	go srv.server.Serve(link.HandlerFunc(sessionLoop))
+}
+
 func sessionLoop(session *link.Session, ctx link.Context, _ error) {
 	srv := ctx.(*CandyVPNServer)
 
@@ -166,6 +166,9 @@ func sessionLoop(session *link.Session, ctx link.Context, _ error) {
 
 		sid := session.ID()
 		peer := srv.peers.GetPeerBySid(sid)
+		if peer != nil {
+			peer.Touch()
+		}
 
 		switch req.(type) {
 		case protodef.Handshake:
@@ -179,23 +182,22 @@ func sessionLoop(session *link.Session, ctx link.Context, _ error) {
 				srv.peers.AddSessionToPeer(peer, sid)
 			}
 
-			peer.LastSeenTime = time.Now()
 			log.Debugf("assign address %s", peer.Ip)
-			atomic.StoreInt32(&peer.state, HOP_STAT_HANDSHAKE)
+			atomic.StoreInt32(&peer.State, HOP_STAT_HANDSHAKE)
 
 			size, _ := srv.peers.IpPool.subnet.Mask.Size()
 
 			msg := &protodef.HandshakeAck{
 				Header:req.(protodef.Handshake).Header,
-				Ip:peer.Ip,
+				Ip:binary.BigEndian.Uint32(peer.Ip.To4()),
 				MarkSize:size,
 			}
 			err = srv.SendToClient(peer, session, msg)
 
 			go func() {
 				select {
-				case <-peer.hsDone:
-					peer.state = HOP_STAT_WORKING
+				case <-peer.HandshakeDone:
+					peer.State = HOP_STAT_WORKING
 					return
 				case <-time.After(8 * time.Second):
 					msg := &protodef.Fin{Header:req.(protodef.Handshake).Header}
@@ -204,28 +206,31 @@ func sessionLoop(session *link.Session, ctx link.Context, _ error) {
 				}
 			}()
 		case protodef.Ping:
-			if peer.state == HOP_STAT_WORKING {
+			if peer != nil && peer.State == HOP_STAT_WORKING {
 
 				msg := &protodef.PingAck{Header:req.(protodef.Ping).Header}
 				err = srv.SendToClient(peer, session, msg)
 			}
 		case protodef.Data:
-			if peer.state == HOP_STAT_WORKING {
+			if peer != nil && peer.State == HOP_STAT_WORKING {
 				srv.toIface <- req.(protodef.Data).Payload
 			}
 		case protodef.Fin:
-			log.Infof("Releasing client ip: %d", peer.Ip)
-			msg := &protodef.FinAck{Header:req.(protodef.Fin).Header}
-			err = srv.SendToClient(peer, session, msg)
-			srv.peers.DeletePeer(peer)
+			if peer != nil {
+				log.Infof("Releasing client ip: %d", peer.Ip)
+				msg := &protodef.FinAck{Header:req.(protodef.Fin).Header}
+				err = srv.SendToClient(peer, session, msg)
+				srv.peers.DeletePeer(peer)
+			}
 
 		case protodef.HandshakeAck:
-			log.Infof("Client %d Connected", peer.Ip)
-			if ok := atomic.CompareAndSwapInt32(&peer.state, HOP_STAT_HANDSHAKE, HOP_STAT_WORKING); ok {
-				close(peer.hsDone)
+			if peer != nil {
+				log.Infof("Client %d Connected", peer.Ip)
+				if ok := atomic.CompareAndSwapInt32(&peer.State, HOP_STAT_HANDSHAKE, HOP_STAT_WORKING); ok {
+					close(peer.HandshakeDone)
+				}
 			}
 		case protodef.PingAck:
-			return
 		case protodef.DataAck:
 		case protodef.FinAck:
 		default:
