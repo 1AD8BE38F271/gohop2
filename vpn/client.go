@@ -92,7 +92,7 @@ func NewClient(cfg *VPNConfig) error {
 		hopClient.router.DefaultGateway)
 
 	go hopClient.handleConnection(session)
-	append(hopClient.sessions, session)
+	hopClient.sessions = append(hopClient.sessions, session)
 
 	wait_handshake:
 	for {
@@ -223,10 +223,10 @@ func (clt *CandyVPNClient) handleConnection(session *link.Session) {
 					log.Errorf("Client state not expected: %d", clt.peer.State)
 				}
 				close(clt.peer.HandshakeDone)
-				clt.sendToServer(rsp, session)
+				clt.sendToServer(rsp.(*protodef.HandshakeAck), session)
 
 			} else if atomic.LoadInt32(&clt.peer.State) == HOP_STAT_WORKING {
-				clt.sendToServer(rsp, session)
+				clt.sendToServer(rsp.(*protodef.HandshakeAck), session)
 			}
 
 		case protodef.PingAck:

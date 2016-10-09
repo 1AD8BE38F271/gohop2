@@ -165,7 +165,7 @@ func sessionLoop(session *link.Session, ctx link.Context, _ error) {
 		}
 
 		sid := session.ID()
-		peer := srv.peers.GetPeerBySid(sid)
+		peer := srv.peers.GetPeerBySession(sid)
 		if peer != nil {
 			peer.Touch()
 		}
@@ -190,7 +190,7 @@ func sessionLoop(session *link.Session, ctx link.Context, _ error) {
 			msg := &protodef.HandshakeAck{
 				Header:req.(protodef.Handshake).Header,
 				Ip:binary.BigEndian.Uint32(peer.Ip.To4()),
-				MarkSize:size,
+				MarkSize:uint32(size),
 			}
 			err = srv.SendToClient(peer, session, msg)
 

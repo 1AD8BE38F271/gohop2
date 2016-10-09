@@ -132,7 +132,7 @@ func (vs *VPNPeersManager) AddSessionToPeer(peer *VPNPeer, sid uint64) {
 		l = vs.peerToSessions[peer]
 	}
 
-	append(l, sid)
+	l = append(l, sid)
 }
 
 func (vs *VPNPeersManager) GetPeerByIp(ip net.IP) (*VPNPeer) {
@@ -174,7 +174,7 @@ func (vs *VPNPeersManager) GetAllPeers() ([]*VPNPeer) {
 	peers := []*VPNPeer{}
 
 	for _, peer := range vs.peerBySid {
-		append(peers, peer)
+		peers = append(peers, peer)
 	}
 	return peers
 }
