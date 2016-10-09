@@ -22,7 +22,7 @@ type TestPacket struct {
 func (m *TestPacket) Reset()                    { *m = TestPacket{} }
 func (m *TestPacket) String() string            { return proto.CompactTextString(m) }
 func (*TestPacket) ProtoMessage()               {}
-func (*TestPacket) Descriptor() ([]byte, []int) { return fileDescriptor2, []int{0} }
+func (*TestPacket) Descriptor() ([]byte, []int) { return fileDescriptor5, []int{0} }
 
 func (m *TestPacket) GetSessions() map[string]uint64 {
 	if m != nil {
@@ -32,12 +32,12 @@ func (m *TestPacket) GetSessions() map[string]uint64 {
 }
 
 func init() {
-	proto.RegisterType((*TestPacket)(nil), "proto.TestPacket")
+	proto.RegisterType((*TestPacket)(nil), "protodef.TestPacket")
 }
 
-func init() { proto.RegisterFile("test.proto", fileDescriptor2) }
+func init() { proto.RegisterFile("test.proto", fileDescriptor5) }
 
-var fileDescriptor2 = []byte{
+var fileDescriptor5 = []byte{
 	// 169 bytes of a gzipped FileDescriptorProto
 	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x09, 0x6e, 0x88, 0x02, 0xff, 0xe2, 0xe2, 0x2a, 0x49, 0x2d, 0x2e,
 	0xd1, 0x2b, 0x28, 0xca, 0x2f, 0xc9, 0x17, 0xe2, 0x00, 0x53, 0x29, 0xa9, 0x69, 0x4a, 0xeb, 0x19,

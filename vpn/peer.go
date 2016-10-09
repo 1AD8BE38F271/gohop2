@@ -21,23 +21,24 @@ import (
 	"time"
 	"net"
 	"sync/atomic"
-	"math/rand"
+	"sync"
 )
 
 type VPNPeer struct {
-	Id           uint32
+	Sid          uint32
 	Ip           net.IP
+
 	seq          uint32
 	state        int32
 	hsDone       chan struct{}
 	LastSeenTime time.Time
 }
 
-func NewVPNPeer(id uint32, ip net.IP) *VPNPeer {
+func NewVPNPeer(sid uint32, ip net.IP) *VPNPeer {
 	hp := new(VPNPeer)
 	hp.state = HOP_STAT_INIT
 	hp.seq = 0
-	hp.Id = id
+	hp.Sid = sid
 	hp.Ip = ip
 	hp.LastSeenTime = time.Now()
 	hp.hsDone = make(chan struct{})
@@ -48,85 +49,32 @@ func (peer *VPNPeer) NextSeq() uint32 {
 	return atomic.AddUint32(&peer.seq, 1)
 }
 
-type VPNPeers struct {
-	IpPool        *IPPool
-	PeersByIp     map[string]*VPNPeer
-	PeerTimeout   chan *VPNPeer
-	PeersByID     map[uint32]*VPNPeer
-	PeerToStreams map[*VPNPeer]map[string]bool
+type VPNPeersManager struct {
+	IpPool         *IPPool
+	PeerTimeout    chan *VPNPeer
+
+	peerByIp       map[string]*VPNPeer
+	peerBySid      map[uint32]*VPNPeer
+	peerLock       sync.RWMutex
+
+	sessionToPeer  map[uint64]*VPNPeer
+	peerToSessions map[*VPNPeer][]uint64
+	sessionLock    sync.RWMutex
 }
 
-func NewVPNPeers(subnet *net.IPNet, timeout time.Duration) (vs *VPNPeers) {
-	vs = new(VPNPeers)
+func NewVPNPeers(subnet *net.IPNet, timeout time.Duration) (vs *VPNPeersManager) {
+	vs = new(VPNPeersManager)
 	vs.IpPool = &IPPool{subnet:subnet}
-	vs.PeersByIp = map[string]*VPNPeer{}
-	vs.PeersByID =  map[uint32]*VPNPeer{}
+	vs.peerByIp = map[string]*VPNPeer{}
+	vs.peerBySid = map[uint32]*VPNPeer{}
 	vs.PeerTimeout = make(chan *VPNPeer)
-	vs.PeerToStreams = map[*VPNPeer]map[string]bool{}
 
 	go vs.checkTimeout(timeout)
 	return
 }
 
-func (vs *VPNPeers) NewPeer(id uint32) (peer *VPNPeer, err error) {
-	ipnet, err := vs.IpPool.Next()
-	if err != nil {
-		return
-	}
-
-	peer = NewVPNPeer(id, ipnet.IP)
-	vs.PeersByIp[peer.Ip.String()] = peer
-	vs.PeersByID[id] = peer
-	return
-}
-
-func (vs *VPNPeers) AddStreamTo(stream string, peer *VPNPeer) {
-	if streams, ok := vs.PeerToStreams[peer]; ok {
-		streams[stream] = true
-	} else {
-		vs.PeerToStreams[peer] = map[string]bool{stream:true}
-	}
-}
-
-func GetRand(a map[string]bool) string {
-	// produce a pseudo-random number between 0 and len(a)-1
-	i := int(float32(len(a)) * rand.Float32())
-	for k, _ := range a {
-		if i == 0 {
-			return k
-		} else {
-			i--
-		}
-	}
-	panic("impossible")
-}
-
-func (vs *VPNPeers) RandomStreamFor(peer *VPNPeer) string {
-	if streams, ok := vs.PeerToStreams[peer]; ok {
-		return GetRand(streams)
-	} else {
-		return ""
-	}
-}
-
-func (vs *VPNPeers) DeleteStream(stream string) {
-	for _, peer := range vs.PeersByIp {
-		if streams, ok := vs.PeerToStreams[peer]; ok {
-			delete(streams, stream)
-			return
-		}
-	}
-}
-
-func (vs *VPNPeers) DeletePeer(peer *VPNPeer) {
-	vs.IpPool.Release(peer.Ip)
-	delete(vs.PeersByIp, peer.Ip.String())
-	delete(vs.PeersByID, peer.Id)
-	delete(vs.PeerToStreams, peer)
-}
-
-func (vs *VPNPeers) checkTimeout(timeout time.Duration) {
-	for _, peer := range vs.PeersByIp {
+func (vs *VPNPeersManager) checkTimeout(timeout time.Duration) {
+	for _, peer := range vs.peerByIp {
 		log.Debugf("watch: %v", peer.LastSeenTime)
 		conntime := time.Since(peer.LastSeenTime)
 		if conntime > timeout {
@@ -135,4 +83,91 @@ func (vs *VPNPeers) checkTimeout(timeout time.Duration) {
 		}
 	}
 
+}
+
+func (vs *VPNPeersManager) NewPeer(id uint32) (peer *VPNPeer, err error) {
+	ipnet, err := vs.IpPool.Next()
+	if err != nil {
+		return
+	}
+
+	peer = NewVPNPeer(id, ipnet.IP)
+
+	vs.peerLock.Lock()
+	vs.peerByIp[peer.Ip.String()] = peer
+	vs.peerBySid[id] = peer
+	vs.peerLock.Unlock()
+
+	return
+}
+
+func (vs *VPNPeersManager) DeletePeer(peer *VPNPeer) {
+	vs.IpPool.Release(peer.Ip)
+	delete(vs.peerByIp, peer.Ip.String())
+	delete(vs.peerBySid, peer.Sid)
+
+	vs.sessionLock.Lock()
+	defer vs.sessionLock.Unlock()
+	for _, sid := range vs.peerToSessions[peer] {
+		delete(vs.sessionToPeer, sid)
+	}
+	delete(vs.peerToSessions, peer)
+}
+
+func (vs *VPNPeersManager) AddSessionToPeer(peer *VPNPeer, sid uint64) {
+	vs.sessionLock.Lock()
+	defer vs.sessionLock.Unlock()
+
+	vs.sessionToPeer[sid] = peer
+	l, found := vs.peerToSessions[peer]
+	if !found {
+		vs.peerToSessions[peer] = []uint64{}
+		l = vs.peerToSessions[peer]
+	}
+
+	append(l, sid)
+}
+
+func (vs *VPNPeersManager) GetPeerByIp(ip net.IP) (*VPNPeer) {
+	vs.peerLock.RLock()
+	defer vs.peerLock.RUnlock()
+
+	return vs.peerByIp[ip.String()]
+}
+
+
+
+func (vs *VPNPeersManager) GetPeerBySid(sid uint32) (*VPNPeer) {
+	vs.peerLock.RLock()
+	defer vs.peerLock.RUnlock()
+
+
+	return vs.peerBySid[sid]
+}
+
+func (vs *VPNPeersManager) GetPeerBySession(sid uint64) (*VPNPeer) {
+	vs.sessionLock.RLock()
+	defer vs.sessionLock.RUnlock()
+
+
+	return vs.sessionToPeer[sid]
+}
+
+func (vs *VPNPeersManager) GetPeerSessions(peer *VPNPeer) ([]uint64) {
+	vs.sessionLock.RLock()
+	defer vs.sessionLock.RUnlock()
+	return vs.peerToSessions[peer]
+}
+
+
+func (vs *VPNPeersManager) GetAllPeers() ([]*VPNPeer) {
+	vs.peerLock.RLock()
+	defer vs.peerLock.RUnlock()
+
+	peers := []*VPNPeer{}
+
+	for _, peer := range vs.peerBySid {
+		append(peers, peer)
+	}
+	return peers
 }

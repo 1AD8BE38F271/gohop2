@@ -43,8 +43,6 @@ type CandyVPNClient struct {
 
 	peer       *VPNPeer
 	toIface    chan []byte
-	netStreams PacketStreams
-	pktHandle  map[Protocol]func(string, *HopPacket)
 
 	finishAck  chan struct{} //清理时是主动发送FIN包，这个chan只是用来锁定是否收到的FIN的回应
 }
@@ -55,7 +53,6 @@ func NewClient(cfg *VPNConfig) error {
 	hopClient := new(CandyVPNClient)
 	hopClient.peer = NewVPNPeer(uint32(rand.Int31n(0xFFFFFF)), net.IP{0, 0, 0, 0})
 	hopClient.toIface = make(chan []byte, 128)
-	hopClient.netStreams = NewPacketStreams()
 	hopClient.router, _ = routes.NewRoutesManager()
 	hopClient.dnsManager = new(dns.DNSManager)
 
@@ -148,15 +145,6 @@ func (clt *CandyVPNClient) handleInterface() {
 }
 
 func (clt *CandyVPNClient) forwardFrames() {
-
-	clt.pktHandle = map[Protocol](func(string, *HopPacket)){
-		HOP_FLG_HSH_ACK: clt.handleHandshakeAck,
-		HOP_FLG_PING:    clt.handlePing,
-		HOP_FLG_PING_ACK:clt.handlePingAck,
-		HOP_FLG_DAT:     clt.handleDataPacket,
-		HOP_FLG_FIN_ACK: clt.handleFinishAck,
-		HOP_FLG_FIN:     clt.handleFinish,
-	}
 
 	for {
 		inp := <-clt.netStreams.InPackets

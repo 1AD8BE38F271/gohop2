@@ -1,13 +1,12 @@
 syntax = "proto3";
-package proto;
+package protodef;
 import "header.proto";
 
-message Data {
+message Fin {
   PacketHeader header = 1;
-  bytes payload = 2
 }
 
 
-message DataAck {
+message FinAck {
   PacketHeader header = 1;
 }

@@ -21,15 +21,15 @@ type PacketHeader struct {
 func (m *PacketHeader) Reset()                    { *m = PacketHeader{} }
 func (m *PacketHeader) String() string            { return proto.CompactTextString(m) }
 func (*PacketHeader) ProtoMessage()               {}
-func (*PacketHeader) Descriptor() ([]byte, []int) { return fileDescriptor1, []int{0} }
+func (*PacketHeader) Descriptor() ([]byte, []int) { return fileDescriptor3, []int{0} }
 
 func init() {
 	proto.RegisterType((*PacketHeader)(nil), "protodef.PacketHeader")
 }
 
-func init() { proto.RegisterFile("header.proto", fileDescriptor1) }
+func init() { proto.RegisterFile("header.proto", fileDescriptor3) }
 
-var fileDescriptor1 = []byte{
+var fileDescriptor3 = []byte{
 	// 88 bytes of a gzipped FileDescriptorProto
 	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x09, 0x6e, 0x88, 0x02, 0xff, 0xe2, 0xe2, 0xc9, 0x48, 0x4d, 0x4c,
 	0x49, 0x2d, 0xd2, 0x2b, 0x28, 0xca, 0x2f, 0xc9, 0x17, 0xe2, 0x00, 0x53, 0x29, 0xa9, 0x69, 0x4a,

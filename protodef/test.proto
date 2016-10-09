@@ -1,5 +1,5 @@
 syntax = "proto3";
-package proto;
+package protodef;
 
 message TestPacket {
       uint32 sid= 1;

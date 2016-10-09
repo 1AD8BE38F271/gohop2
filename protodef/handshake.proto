@@ -1,12 +1,14 @@
 syntax = "proto3";
-package proto;
+package protodef;
 import "header.proto";
 
-message Ping {
+message Handshake {
   PacketHeader header = 1;
 }
 
 
-message PingAck {
+message HandshakeAck {
   PacketHeader header = 1;
+  uint32 ip = 2;
+  uint32 mark_size = 3;
 }
