@@ -32,7 +32,7 @@ func (m *TestPacket) GetSessions() map[string]uint64 {
 }
 
 func init() {
-	proto.RegisterType((*TestPacket)(nil), "protodef.TestPacket")
+	proto.RegisterType((*TestPacket)(nil), "proto.TestPacket")
 }
 
 func init() { proto.RegisterFile("test.proto", fileDescriptor2) }

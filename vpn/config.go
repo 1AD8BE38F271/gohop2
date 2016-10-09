@@ -27,6 +27,13 @@ import (
 
 var log logger.Logger
 
+const (
+	HOP_STAT_INIT int32 = iota // initing
+	HOP_STAT_HANDSHAKE              // handeshaking
+	HOP_STAT_WORKING                // working
+	HOP_STAT_FIN                    // finishing
+)
+
 // Server Config
 type VPNConfig struct {
 	Protocol    conn.TransProtocol `toml:"protocol"`
@@ -35,8 +42,7 @@ type VPNConfig struct {
 	ServerAddr  string `toml:"server-addr"`
 	DNS         string `toml:"local-dns"`
 	ListenAddr  string `toml:"addr"`
-	PortStart   int    `toml:"port-start"`
-	PortEnd     int    `toml:"port-end"`
+	ServerPort  int    `toml:"server-port"`
 	Subnet      string `toml:"subnet"`
 	MTU         int    `toml:"mtu"`
 	Key         string `toml:"key"`

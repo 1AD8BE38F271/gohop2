@@ -30,7 +30,7 @@ import (
 	"time"
 	"github.com/FTwOoO/vpncore/tuntap"
 	"github.com/FTwOoO/vpncore/conn"
-	"github.com/FTwOoO/go-enc"
+	"github.com/FTwOoO/vpncore/enc"
 	"github.com/FTwOoO/vpncore/routes"
 	"github.com/FTwOoO/vpncore/dns"
 )

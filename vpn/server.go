@@ -29,7 +29,9 @@ import (
 	"github.com/FTwOoO/vpncore/tcpip"
 	"github.com/FTwOoO/vpncore/tuntap"
 	"github.com/FTwOoO/go-logger"
-	"github.com/FTwOoO/go-enc"
+	"github.com/FTwOoO/vpncore/enc"
+	"github.com/FTwOoO/link/codec"
+	"github.com/FTwOoO/link"
 )
 
 const (
@@ -85,9 +87,7 @@ func NewServer(cfg *VPNConfig) (err error) {
 
 	hopServer.peers = NewVPNPeers(subnet, time.Duration(hopServer.cfg.PeerTimeout) * time.Second)
 
-	for port := cfg.PortStart; port <= cfg.PortEnd; port++ {
-		go hopServer.listen(cfg.Protocol, enc.Cipher(cfg.Cipher), cfg.Password, fmt.Sprintf("%s:%d", cfg.ListenAddr, port))
-	}
+	go hopServer.listen(cfg.Protocol, enc.Cipher(cfg.Cipher), cfg.Password, fmt.Sprintf("%s:%d", cfg.ListenAddr, cfg.ServerPort))
 
 	go hopServer.handleInterface()
 	go hopServer.forwardFrames()
@@ -124,34 +124,27 @@ func (srv *CandyVPNServer) handleInterface() {
 }
 
 func (srv *CandyVPNServer) listen(protocol conn.TransProtocol, cipher enc.Cipher, pass string, addr string) {
-	l, err := conn.NewListener(protocol, addr, &enc.BlockConfig{Cipher:cipher, Password:pass})
+	server, err := CreateServer(protocol, addr, cipher, pass, codec.NewProtobufProtocol([]string{}), 0x1000)
 	if err != nil {
 		log.Errorf("Failed to listen on %s: %s", addr, err.Error())
 		return
 	}
 
-	defer l.Close()
+	go server.Serve(link.HandlerFunc(sessionLoop))
+}
 
+func sessionLoop(session *link.Session, _ link.Context, _ error) {
 	for {
-		connection, err := l.Accept()
+		req, err := session.Receive()
 		if err != nil {
-			log.Errorf("Server %d close because of %v", addr, err)
+			log.Error(err.Error())
 			return
 		}
 
-		streamK, _ := srv.netStreams.AddConnection(connection)
+		err = session.Send(&AddRsp{
+			req.(*AddReq).A + req.(*AddReq).B,
+		})
 
-		go func(streamK string) {
-			for {
-				err = srv.netStreams.Read(streamK)
-				if err != nil {
-					srv.netStreams.Close(streamK)
-					log.Error(err.Error())
-					return
-				}
-
-			}
-		}(streamK)
 	}
 }
 
