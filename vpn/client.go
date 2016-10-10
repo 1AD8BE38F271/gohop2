@@ -37,6 +37,7 @@ import (
 	"reflect"
 	"github.com/golang/protobuf/proto"
 	"encoding/binary"
+	"github.com/FTwOoO/vpncore/tcpip"
 )
 
 type CandyVPNClient struct {
@@ -148,6 +149,9 @@ func (clt *CandyVPNClient) handleInterface() {
 		}
 		buf := make([]byte, n)
 		copy(buf, frame)
+		dest := tcpip.IPv4Packet(buf).DestinationIP().To4()
+		log.Debugf("from iface packet: ip dest %v", dest)
+
 		clt.sendToServer(&protodef.Data{Header:&protodef.PacketHeader{Pid:clt.peer.Id, Seq:clt.peer.NextSeq()},Payload:buf}, nil)
 	}
 }
@@ -191,6 +195,9 @@ func (clt *CandyVPNClient) handleConnection(session *link.Session) {
 			return
 		}
 
+		log.Debugf("receive a msg:%s", reflect.TypeOf(rsp))
+
+
 		switch rsp.(type) {
 		case *protodef.Handshake:
 
@@ -199,7 +206,10 @@ func (clt *CandyVPNClient) handleConnection(session *link.Session) {
 
 		case *protodef.Data:
 			if clt.peer.State == HOP_STAT_WORKING {
-				clt.toIface <- (rsp.(*protodef.Data)).Payload
+				ipPacket := (rsp.(*protodef.Data)).Payload
+				dest := tcpip.IPv4Packet(ipPacket).DestinationIP().To4()
+				log.Debugf("from net packet: ip dest %v", dest)
+				clt.toIface <- ipPacket
 			}
 		case *protodef.Fin:
 			pid := os.Getpid()

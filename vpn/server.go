@@ -134,12 +134,16 @@ func (srv *CandyVPNServer) forwardFrames() {
 				log.Debugf("ip dest: %v", dest)
 				peer := srv.peers.GetPeerByIp(dest)
 				if peer != nil {
+					log.Debugf("send packet to ip %v ...", dest)
 					msg := &protodef.Data{
 						Header:&protodef.PacketHeader{Pid:peer.Id, Seq:peer.NextSeq()},
 						Payload:pack,
 					}
 
-					srv.SendToClient(peer, nil, msg)
+					err := srv.SendToClient(peer, nil, msg)
+					if err != nil {
+						log.Errorf("send packet to ip %v fail:%v!", dest, err)
+					}
 				}
 			}
 
@@ -297,6 +301,10 @@ func (srv *CandyVPNServer) SendToClient(peer *VPNPeer, session *link.Session, ms
 	}
 
 	allSessionId := srv.peers.GetPeerSessions(peer)
+
+	if allSessionId == nil || len(allSessionId) == 0 {
+		return fmt.Errorf("No active sessions found for peer[%s]", peer.Ip)
+	}
 
 	for _, sessionId := range allSessionId {
 		session := srv.server.GetSession(sessionId)

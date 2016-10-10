@@ -130,11 +130,11 @@ func (vs *VPNPeersManager) AddSessionToPeer(peer *VPNPeer, sid uint64) {
 	vs.sessionToPeer[sid] = peer
 	l, found := vs.peerToSessions[peer]
 	if !found {
-		vs.peerToSessions[peer] = []uint64{}
-		l = vs.peerToSessions[peer]
-	}
+		vs.peerToSessions[peer] = []uint64{sid}
+	} else {
 
-	l = append(l, sid)
+		vs.peerToSessions[peer] = append(l, sid)
+	}
 }
 
 func (vs *VPNPeersManager) GetPeerByIp(ip net.IP) (*VPNPeer) {
