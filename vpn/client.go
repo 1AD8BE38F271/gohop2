@@ -79,7 +79,7 @@ func NewClient(cfg *VPNConfig) error {
 		serverAddr,
 		enc.Cipher(cfg.Cipher),
 		cfg.Password,
-		codec.NewProtobufProtocol(hopClient, []string{}),
+		codec.NewProtobufProtocol(hopClient, allApplicationProtocols),
 		0x100)
 
 	if err != nil {

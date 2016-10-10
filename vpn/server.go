@@ -145,7 +145,7 @@ func (srv *CandyVPNServer) forwardFrames() {
 
 func (srv *CandyVPNServer) listen(protocol conn.TransProtocol, cipher enc.Cipher, pass string, addr string) {
 	var err error
-	srv.server, err = CreateServer(protocol, addr, cipher, pass, codec.NewProtobufProtocol(srv, []string{}), 0x1000)
+	srv.server, err = CreateServer(protocol, addr, cipher, pass, codec.NewProtobufProtocol(srv, allApplicationProtocols), 0x1000)
 	if err != nil {
 		log.Errorf("Failed to listen on %s: %s", addr, err.Error())
 		os.Exit(0)
@@ -155,6 +155,7 @@ func (srv *CandyVPNServer) listen(protocol conn.TransProtocol, cipher enc.Cipher
 }
 
 func sessionLoop(session *link.Session, ctx link.Context, _ error) {
+	log.Debugf("new session:%d", session.ID())
 	srv := ctx.(*CandyVPNServer)
 
 	for {
@@ -164,6 +165,7 @@ func sessionLoop(session *link.Session, ctx link.Context, _ error) {
 			return
 		}
 
+		log.Debugf("receive a msg:%s", reflect.TypeOf(req))
 		sid := session.ID()
 		peer := srv.peers.GetPeerBySession(sid)
 		if peer != nil {

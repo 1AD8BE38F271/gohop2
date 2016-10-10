@@ -25,14 +25,6 @@ import (
 	"time"
 )
 
-var log logger.Logger
-
-const (
-	HOP_STAT_INIT int32 = iota // initing
-	HOP_STAT_HANDSHAKE              // handeshaking
-	HOP_STAT_WORKING                // working
-	HOP_STAT_FIN                    // finishing
-)
 
 // Server Config
 type VPNConfig struct {
