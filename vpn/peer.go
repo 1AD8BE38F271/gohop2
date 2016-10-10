@@ -25,7 +25,7 @@ import (
 )
 
 type VPNPeer struct {
-	Sid           uint32
+	Id            uint32
 	Ip            net.IP
 
 	seq           uint32
@@ -38,7 +38,7 @@ func NewVPNPeer(sid uint32, ip net.IP) *VPNPeer {
 	hp := new(VPNPeer)
 	hp.State = HOP_STAT_INIT
 	hp.seq = 0
-	hp.Sid = sid
+	hp.Id = sid
 	hp.Ip = ip
 	hp.LastSeenTime = time.Now()
 	hp.HandshakeDone = make(chan struct{})
@@ -46,7 +46,7 @@ func NewVPNPeer(sid uint32, ip net.IP) *VPNPeer {
 }
 
 func (peer *VPNPeer) NextSeq() uint32 {
-	return atomic.AddUint32(&peer.seq, 1)
+	return atomic.AddUint32(&(peer.seq), 1)
 }
 
 func (peer *VPNPeer) Touch() {
@@ -58,7 +58,7 @@ type VPNPeersManager struct {
 	PeerTimeout    chan *VPNPeer
 
 	peerByIp       map[string]*VPNPeer
-	peerBySid      map[uint32]*VPNPeer
+	peerById       map[uint32]*VPNPeer
 	peerLock       sync.RWMutex
 
 	sessionToPeer  map[uint64]*VPNPeer
@@ -70,7 +70,9 @@ func NewVPNPeers(subnet *net.IPNet, timeout time.Duration) (vs *VPNPeersManager)
 	vs = new(VPNPeersManager)
 	vs.IpPool = &IPPool{subnet:subnet}
 	vs.peerByIp = map[string]*VPNPeer{}
-	vs.peerBySid = map[uint32]*VPNPeer{}
+	vs.peerById = map[uint32]*VPNPeer{}
+	vs.sessionToPeer = map[uint64]*VPNPeer{}
+	vs.peerToSessions = map[*VPNPeer][]uint64{}
 	vs.PeerTimeout = make(chan *VPNPeer, 100)
 
 	go vs.checkTimeout(timeout)
@@ -102,7 +104,7 @@ func (vs *VPNPeersManager) NewPeer(id uint32) (peer *VPNPeer, err error) {
 
 	vs.peerLock.Lock()
 	vs.peerByIp[peer.Ip.String()] = peer
-	vs.peerBySid[id] = peer
+	vs.peerById[id] = peer
 	vs.peerLock.Unlock()
 
 	return
@@ -111,7 +113,7 @@ func (vs *VPNPeersManager) NewPeer(id uint32) (peer *VPNPeer, err error) {
 func (vs *VPNPeersManager) DeletePeer(peer *VPNPeer) {
 	vs.IpPool.Release(peer.Ip)
 	delete(vs.peerByIp, peer.Ip.String())
-	delete(vs.peerBySid, peer.Sid)
+	delete(vs.peerById, peer.Id)
 
 	vs.sessionLock.Lock()
 	defer vs.sessionLock.Unlock()
@@ -142,20 +144,16 @@ func (vs *VPNPeersManager) GetPeerByIp(ip net.IP) (*VPNPeer) {
 	return vs.peerByIp[ip.String()]
 }
 
-
-
-func (vs *VPNPeersManager) GetPeerBySid(sid uint32) (*VPNPeer) {
+func (vs *VPNPeersManager) GetPeerById(sid uint32) (*VPNPeer) {
 	vs.peerLock.RLock()
 	defer vs.peerLock.RUnlock()
 
-
-	return vs.peerBySid[sid]
+	return vs.peerById[sid]
 }
 
 func (vs *VPNPeersManager) GetPeerBySession(sid uint64) (*VPNPeer) {
 	vs.sessionLock.RLock()
 	defer vs.sessionLock.RUnlock()
-
 
 	return vs.sessionToPeer[sid]
 }
@@ -166,14 +164,13 @@ func (vs *VPNPeersManager) GetPeerSessions(peer *VPNPeer) ([]uint64) {
 	return vs.peerToSessions[peer]
 }
 
-
 func (vs *VPNPeersManager) GetAllPeers() ([]*VPNPeer) {
 	vs.peerLock.RLock()
 	defer vs.peerLock.RUnlock()
 
 	peers := []*VPNPeer{}
 
-	for _, peer := range vs.peerBySid {
+	for _, peer := range vs.peerById {
 		peers = append(peers, peer)
 	}
 	return peers

@@ -101,7 +101,9 @@ func (srv *CandyVPNServer) handleInterface() {
 	go func() {
 		for {
 			pbytes := <-srv.toIface
-			log.Debug("New Net packet to device")
+
+			dest := tcpip.IPv4Packet(pbytes).DestinationIP().To4()
+			log.Debugf("to iface packet: ip dest %v", dest)
 			_, err := srv.iface.Write(pbytes)
 			if err != nil {
 				return
@@ -131,12 +133,14 @@ func (srv *CandyVPNServer) forwardFrames() {
 				dest := tcpip.IPv4Packet(pack).DestinationIP().To4()
 				log.Debugf("ip dest: %v", dest)
 				peer := srv.peers.GetPeerByIp(dest)
-				msg := &protodef.Data{
-					Header:&protodef.PacketHeader{Sid:peer.Sid, Seq:peer.NextSeq()},
-					Payload:pack,
-				}
+				if peer != nil {
+					msg := &protodef.Data{
+						Header:&protodef.PacketHeader{Pid:peer.Id, Seq:peer.NextSeq()},
+						Payload:pack,
+					}
 
-				srv.SendToClient(peer, nil, msg)
+					srv.SendToClient(peer, nil, msg)
+				}
 			}
 
 		}
@@ -161,27 +165,33 @@ func sessionLoop(session *link.Session, ctx link.Context, _ error) {
 	for {
 		req, err := session.Receive()
 		if err != nil {
-			log.Error(err.Error())
+			log.Errorf("sesscion receive error: %v", err)
 			return
 		}
 
 		log.Debugf("receive a msg:%s", reflect.TypeOf(req))
-		sid := session.ID()
-		peer := srv.peers.GetPeerBySession(sid)
+		sessionId := session.ID()
+		peer := srv.peers.GetPeerBySession(sessionId)
 		if peer != nil {
 			peer.Touch()
 		}
 
 		switch req.(type) {
-		case protodef.Handshake:
+		case *protodef.Handshake:
 			if peer == nil {
-				peer, err = srv.peers.NewPeer(req.(protodef.Handshake).Header.Sid)
+				reqmsg := req.(*protodef.Handshake)
+				if reqmsg.Header == nil {
+					panic("Header ????")
+				}
+
+				Pid := reqmsg.Header.Pid
+				peer, err = srv.peers.NewPeer(Pid)
 				if err != nil {
 					log.Errorf("Cant alloc IP from pool %v", err)
 				}
-				srv.peers.AddSessionToPeer(peer, sid)
+				srv.peers.AddSessionToPeer(peer, sessionId)
 			} else {
-				srv.peers.AddSessionToPeer(peer, sid)
+				srv.peers.AddSessionToPeer(peer, sessionId)
 			}
 
 			log.Debugf("assign address %s", peer.Ip)
@@ -190,7 +200,7 @@ func sessionLoop(session *link.Session, ctx link.Context, _ error) {
 			size, _ := srv.peers.IpPool.subnet.Mask.Size()
 
 			msg := &protodef.HandshakeAck{
-				Header:req.(protodef.Handshake).Header,
+				Header:req.(*protodef.Handshake).Header,
 				Ip:binary.BigEndian.Uint32(peer.Ip.To4()),
 				MarkSize:uint32(size),
 			}
@@ -202,39 +212,39 @@ func sessionLoop(session *link.Session, ctx link.Context, _ error) {
 					peer.State = HOP_STAT_WORKING
 					return
 				case <-time.After(8 * time.Second):
-					msg := &protodef.Fin{Header:req.(protodef.Handshake).Header}
+					msg := &protodef.Fin{Header:req.(*protodef.Handshake).Header}
 					err = srv.SendToClient(peer, session, msg)
 					srv.peers.DeletePeer(peer)
 				}
 			}()
-		case protodef.Ping:
+		case *protodef.Ping:
 			if peer != nil && peer.State == HOP_STAT_WORKING {
 
-				msg := &protodef.PingAck{Header:req.(protodef.Ping).Header}
+				msg := &protodef.PingAck{Header:req.(*protodef.Ping).Header}
 				err = srv.SendToClient(peer, session, msg)
 			}
-		case protodef.Data:
+		case *protodef.Data:
 			if peer != nil && peer.State == HOP_STAT_WORKING {
-				srv.toIface <- req.(protodef.Data).Payload
+				srv.toIface <- req.(*protodef.Data).Payload
 			}
-		case protodef.Fin:
+		case *protodef.Fin:
 			if peer != nil {
 				log.Infof("Releasing client ip: %d", peer.Ip)
-				msg := &protodef.FinAck{Header:req.(protodef.Fin).Header}
+				msg := &protodef.FinAck{Header:req.(*protodef.Fin).Header}
 				err = srv.SendToClient(peer, session, msg)
 				srv.peers.DeletePeer(peer)
 			}
 
-		case protodef.HandshakeAck:
+		case *protodef.HandshakeAck:
 			if peer != nil {
 				log.Infof("Client %d Connected", peer.Ip)
 				if ok := atomic.CompareAndSwapInt32(&peer.State, HOP_STAT_HANDSHAKE, HOP_STAT_WORKING); ok {
 					close(peer.HandshakeDone)
 				}
 			}
-		case protodef.PingAck:
-		case protodef.DataAck:
-		case protodef.FinAck:
+		case *protodef.PingAck:
+		case *protodef.DataAck:
+		case *protodef.FinAck:
 		default:
 			log.Errorf("Message type %s that server dont support yet!\n", reflect.TypeOf(req))
 		}
@@ -251,7 +261,7 @@ func (srv *CandyVPNServer) cleanUp() {
 
 	for _, peer := range allPeers {
 		msg := &protodef.Fin{
-			Header:&protodef.PacketHeader{Sid:peer.Sid, Seq:peer.NextSeq()},
+			Header:&protodef.PacketHeader{Pid:peer.Id, Seq:peer.NextSeq()},
 		}
 		srv.SendToClient(peer, nil, msg)
 	}
@@ -268,13 +278,13 @@ func (srv *CandyVPNServer) peerTimeoutWatcher() {
 			for _, peer := range allPeers {
 				log.Debugf("IP: %v", peer.Ip)
 				msg := &protodef.Ping{
-					Header:&protodef.PacketHeader{Sid:peer.Sid, Seq:peer.NextSeq()},
+					Header:&protodef.PacketHeader{Pid:peer.Id, Seq:peer.NextSeq()},
 				}
 				srv.SendToClient(peer, nil, msg)
 			}
 		case peer := <-srv.peers.PeerTimeout:
 			msg := &protodef.Fin{
-				Header:&protodef.PacketHeader{Sid:peer.Sid, Seq:peer.NextSeq()},
+				Header:&protodef.PacketHeader{Pid:peer.Id, Seq:peer.NextSeq()},
 			}
 			srv.SendToClient(peer, nil, msg)
 		}

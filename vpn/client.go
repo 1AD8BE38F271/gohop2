@@ -19,7 +19,6 @@
 package vpn
 
 import (
-	"errors"
 	"fmt"
 	"math/rand"
 	"net"
@@ -86,6 +85,8 @@ func NewClient(cfg *VPNConfig) error {
 		panic(err)
 	}
 
+	go hopClient.cleanUp()
+
 	hopClient.router.AddRouteToHost(
 		hopClient.router.DefaultNic,
 		net.ParseIP(cfg.ServerAddr),
@@ -111,7 +112,10 @@ func NewClient(cfg *VPNConfig) error {
 		dnsl := []net.IP{net.ParseIP(cfg.DNS)}
 		err = hopClient.dnsManager.SetupNewDNS(dnsl)
 		if err != nil {
-			return err
+			log.Error(err.Error())
+			pid := os.Getpid()
+			syscall.Kill(pid, syscall.SIGTERM)
+			return nil
 		}
 
 		for _, dns_ip := range dnsl {
@@ -119,10 +123,8 @@ func NewClient(cfg *VPNConfig) error {
 		}
 	}
 
-	go hopClient.handleInterface()
-	hopClient.cleanUp()
-
-	return errors.New("Not expected to exit")
+	hopClient.handleInterface()
+	return nil
 }
 
 func (clt *CandyVPNClient) handleInterface() {
@@ -146,11 +148,12 @@ func (clt *CandyVPNClient) handleInterface() {
 		}
 		buf := make([]byte, n)
 		copy(buf, frame)
-		clt.sendToServer(&protodef.Data{Payload:buf}, nil)
+		clt.sendToServer(&protodef.Data{Header:&protodef.PacketHeader{Pid:clt.peer.Id, Seq:clt.peer.NextSeq()},Payload:buf}, nil)
 	}
 }
 
 func (clt *CandyVPNClient) handleConnection(session *link.Session) {
+	log.Infof("Connected to server %d\n", session.ID())
 
 	connectionDone := make(chan struct{}, 1)
 
@@ -189,20 +192,20 @@ func (clt *CandyVPNClient) handleConnection(session *link.Session) {
 		}
 
 		switch rsp.(type) {
-		case protodef.Handshake:
+		case *protodef.Handshake:
 
-		case protodef.Ping:
-			clt.sendToServer(&protodef.PingAck{}, session)
+		case *protodef.Ping:
+			clt.sendToServer(&protodef.PingAck{Header:&protodef.PacketHeader{Pid:clt.peer.Id, Seq:clt.peer.NextSeq()}}, session)
 
-		case protodef.Data:
+		case *protodef.Data:
 			if clt.peer.State == HOP_STAT_WORKING {
 				clt.toIface <- (rsp.(*protodef.Data)).Payload
 			}
-		case protodef.Fin:
+		case *protodef.Fin:
 			pid := os.Getpid()
 			syscall.Kill(pid, syscall.SIGTERM)
 
-		case protodef.HandshakeAck:
+		case *protodef.HandshakeAck:
 			if atomic.LoadInt32(&clt.peer.State) == HOP_STAT_HANDSHAKE {
 
 				ipV := rsp.(*protodef.HandshakeAck).Ip
@@ -229,9 +232,9 @@ func (clt *CandyVPNClient) handleConnection(session *link.Session) {
 				clt.sendToServer(rsp.(*protodef.HandshakeAck), session)
 			}
 
-		case protodef.PingAck:
-		case protodef.DataAck:
-		case protodef.FinAck:
+		case *protodef.PingAck:
+		case *protodef.DataAck:
+		case *protodef.FinAck:
 			clt.finishAck <- struct{}{}
 
 		default:
@@ -241,22 +244,24 @@ func (clt *CandyVPNClient) handleConnection(session *link.Session) {
 }
 
 func (clt *CandyVPNClient) ping() {
-	clt.sendToServer(&protodef.Ping{}, nil)
+	clt.sendToServer(&protodef.Ping{Header:&protodef.PacketHeader{Pid:clt.peer.Id, Seq:clt.peer.NextSeq()}}, nil)
 }
 
 func (clt *CandyVPNClient) handeshake() {
 	res := atomic.CompareAndSwapInt32(&clt.peer.State, HOP_STAT_INIT, HOP_STAT_HANDSHAKE)
 	if res {
-		clt.sendToServer(&protodef.Handshake{}, nil)
+		log.Debug("send handhake..\n")
+		clt.sendToServer(&protodef.Handshake{Header:&protodef.PacketHeader{Pid:clt.peer.Id, Seq:clt.peer.NextSeq()}}, nil)
 	}
 }
 
 func (clt *CandyVPNClient) finishSession() {
 	atomic.StoreInt32(&clt.peer.State, HOP_STAT_FIN)
-	clt.sendToServer(&protodef.Fin{}, nil)
+	clt.sendToServer(&protodef.Fin{Header:&protodef.PacketHeader{Pid:clt.peer.Id, Seq:clt.peer.NextSeq()}}, nil)
 }
 
 func (clt *CandyVPNClient) sendToServer(msg proto.Message, session *link.Session) error {
+
 	if session != nil {
 		return session.Send(msg)
 	}

@@ -21,7 +21,7 @@ import (
 	"github.com/FTwOoO/go-logger"
 )
 
-var log logger.Logger
+var log *logger.Logger
 
 var allApplicationProtocols = []string{
 		"protodef.Ping",
@@ -43,4 +43,6 @@ const (
 )
 
 
+func init () {
 
+}

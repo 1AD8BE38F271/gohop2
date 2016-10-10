@@ -59,5 +59,7 @@ func NewVPNConfig(path string) (c *VPNConfig, err error) {
 		return
 	}
 
+	log, _ = logger.NewLogger("", config.LogLevel)
+
 	return &config, nil
 }
