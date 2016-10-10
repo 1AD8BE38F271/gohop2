@@ -10,5 +10,6 @@ message Handshake {
 message HandshakeAck {
   PacketHeader header = 1;
   uint32 ip = 2;
-  uint32 mark_size = 3;
+  uint32 server_ip = 3;
+  uint32 mark_size = 4;
 }

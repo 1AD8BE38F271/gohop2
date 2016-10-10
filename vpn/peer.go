@@ -22,6 +22,7 @@ import (
 	"net"
 	"sync/atomic"
 	"sync"
+	"github.com/FTwOoO/vpncore/tcpip"
 )
 
 type VPNPeer struct {
@@ -54,7 +55,8 @@ func (peer *VPNPeer) Touch() {
 }
 
 type VPNPeersManager struct {
-	IpPool         *IPPool
+	MyIp net.IP
+	IpPool         *tcpip.IP4Pool
 	PeerTimeout    chan *VPNPeer
 
 	peerByIp       map[string]*VPNPeer
@@ -68,7 +70,10 @@ type VPNPeersManager struct {
 
 func NewVPNPeers(subnet *net.IPNet, timeout time.Duration) (vs *VPNPeersManager) {
 	vs = new(VPNPeersManager)
-	vs.IpPool = &IPPool{subnet:subnet}
+	vs.IpPool, _ = tcpip.NewIP4Pool(subnet)
+	vs.MyIp, _ = vs.IpPool.Next()
+	vs.IpPool.Next() // peer ip for server tun interface
+
 	vs.peerByIp = map[string]*VPNPeer{}
 	vs.peerById = map[uint32]*VPNPeer{}
 	vs.sessionToPeer = map[uint64]*VPNPeer{}
@@ -95,12 +100,12 @@ func (vs *VPNPeersManager) checkTimeout(timeout time.Duration) {
 }
 
 func (vs *VPNPeersManager) NewPeer(id uint32) (peer *VPNPeer, err error) {
-	ipnet, err := vs.IpPool.Next()
+	ip, err := vs.IpPool.Next()
 	if err != nil {
 		return
 	}
 
-	peer = NewVPNPeer(id, ipnet.IP)
+	peer = NewVPNPeer(id, ip)
 
 	vs.peerLock.Lock()
 	vs.peerByIp[peer.Ip.String()] = peer

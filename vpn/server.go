@@ -74,7 +74,7 @@ func NewServer(cfg *VPNConfig) (err error) {
 
 	hopServer.iface = iface
 	ip, subnet, err := net.ParseCIDR(cfg.Subnet)
-	err = iface.SetupNetwork(ip, *subnet, cfg.MTU)
+	err = iface.SetupNetwork(ip, nil, *subnet, cfg.MTU)
 	if err != nil {
 		log.Error(err.Error())
 		return err
@@ -201,11 +201,12 @@ func sessionLoop(session *link.Session, ctx link.Context, _ error) {
 			log.Debugf("assign address %s", peer.Ip)
 			atomic.StoreInt32(&peer.State, HOP_STAT_HANDSHAKE)
 
-			size, _ := srv.peers.IpPool.subnet.Mask.Size()
+			size, _ := srv.peers.IpPool.Subnet.Mask.Size()
 
 			msg := &protodef.HandshakeAck{
 				Header:req.(*protodef.Handshake).Header,
 				Ip:binary.BigEndian.Uint32(peer.Ip.To4()),
+				ServerIp:binary.BigEndian.Uint32(srv.peers.MyIp.To4()),
 				MarkSize:uint32(size),
 			}
 			err = srv.SendToClient(peer, session, msg)

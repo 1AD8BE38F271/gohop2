@@ -41,8 +41,3 @@ const (
 	HOP_STAT_FIN                    // finishing
 
 )
-
-
-func init () {
-
-}

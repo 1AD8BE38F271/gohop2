@@ -20,7 +20,6 @@ package vpn
 
 import (
 	"fmt"
-	"math/rand"
 	"net"
 	"os"
 	"os/signal"
@@ -38,6 +37,7 @@ import (
 	"github.com/golang/protobuf/proto"
 	"encoding/binary"
 	"github.com/FTwOoO/vpncore/tcpip"
+	"math/rand"
 )
 
 type CandyVPNClient struct {
@@ -57,7 +57,7 @@ func NewClient(cfg *VPNConfig) error {
 	var err error
 
 	hopClient := new(CandyVPNClient)
-	hopClient.peer = NewVPNPeer(uint32(rand.Int31n(0xFFFFFF)), net.IP{0, 0, 0, 0})
+	hopClient.peer = NewVPNPeer(rand.Uint32(), net.IP{0, 0, 0, 0})
 	hopClient.toIface = make(chan []byte, 128)
 	hopClient.router, _ = routes.NewRoutesManager()
 	hopClient.dnsManager = new(dns.DNSManager)
@@ -218,15 +218,18 @@ func (clt *CandyVPNClient) handleConnection(session *link.Session) {
 		case *protodef.HandshakeAck:
 			if atomic.LoadInt32(&clt.peer.State) == HOP_STAT_HANDSHAKE {
 
-				ipV := rsp.(*protodef.HandshakeAck).Ip
 				ip := make([]byte, 4)
-				binary.BigEndian.PutUint32(ip, ipV)
+				serverIp := make([]byte, 4)
+				binary.BigEndian.PutUint32(ip, rsp.(*protodef.HandshakeAck).Ip)
+				binary.BigEndian.PutUint32(serverIp, rsp.(*protodef.HandshakeAck).ServerIp)
+
+
 				makeSize := rsp.(*protodef.HandshakeAck).MarkSize
 				ipStr := fmt.Sprintf("%d.%d.%d.%d/%d", ip[0], ip[1], ip[2], ip[3], makeSize)
 				ip, subnet, _ := net.ParseCIDR(ipStr)
 				clt.peer.Ip = ip
 
-				err := clt.iface.SetupNetwork(ip, *subnet, clt.cfg.MTU)
+				err := clt.iface.SetupNetwork(ip, serverIp, *subnet, clt.cfg.MTU)
 				if err != nil {
 					panic(err)
 				}
