@@ -10,4 +10,4 @@ key = "ilovethebigbrother"
 peertimeout = 60
 mtu = 1500
 logfile=""
-loglevel="DEBUG"
+loglevel="INFO"
