@@ -92,7 +92,6 @@ func (vs *VPNPeersManager) checkTimeout(timeout time.Duration) {
 		log.Debugf("watch: %v", peer.LastSeenTime)
 		conntime := time.Since(peer.LastSeenTime)
 		if conntime > timeout {
-			vs.DeletePeer(peer)
 			vs.PeerTimeout <- peer
 		}
 	}

@@ -51,6 +51,7 @@ type CandyVPNClient struct {
 	toIface    chan []byte
 
 	finishAck  chan struct{} //清理时是主动发送FIN包，这个chan只是用来锁定是否收到的FIN的回应
+	waitCleanup chan struct{}
 }
 
 func NewClient(cfg *VPNConfig) error {
@@ -65,6 +66,7 @@ func NewClient(cfg *VPNConfig) error {
 
 	hopClient.cfg = cfg
 	hopClient.finishAck = make(chan struct{})
+	hopClient.waitCleanup = make(chan struct{})
 
 	iface, err := tuntap.NewTUN("tun2")
 	if err != nil {
@@ -125,7 +127,9 @@ func NewClient(cfg *VPNConfig) error {
 		}
 	}
 
-	hopClient.handleInterface()
+	go hopClient.handleInterface()
+
+	<- hopClient.waitCleanup
 	return nil
 }
 
@@ -145,7 +149,7 @@ func (clt *CandyVPNClient) handleInterface() {
 	for {
 		n, err := clt.iface.Read(frame)
 		if err != nil {
-			log.Error(err)
+			log.Errorf("Read from iface error %v", err)
 			return
 		}
 		buf := make([]byte, n)
@@ -295,7 +299,7 @@ func (clt *CandyVPNClient) sendToServer(msg proto.Message, session *link.Session
 
 func (clt *CandyVPNClient) cleanUp() {
 	c := make(chan os.Signal, 1)
-	signal.Notify(c, syscall.SIGINT, syscall.SIGTERM, syscall.SIGKILL, syscall.SIGQUIT)
+	signal.Notify(c, syscall.SIGQUIT, os.Interrupt, os.Kill)
 	<-c
 	log.Info("Cleaning Up before exit...")
 
@@ -306,12 +310,20 @@ func (clt *CandyVPNClient) cleanUp() {
 	select {
 	case <-clt.finishAck:
 		log.Info("Finish Acknowledged")
+
 	case <-time.After(3 * time.Second):
 		log.Info("Timeout, give up")
 	}
 
+	for _, s := range clt.sessions {
+		s.Close()
+	}
+
+	log.Info("Destroy iface")
 	clt.iface.Close()
+	log.Info("Restore DNS")
 	clt.dnsManager.RestoreDNS()
+	log.Info("Restore routes")
 	clt.router.Destroy()
-	os.Exit(0)
+	close(clt.waitCleanup)
 }

@@ -230,7 +230,7 @@ func sessionLoop(session *link.Session, ctx link.Context, _ error) {
 			}
 		case *protodef.Fin:
 			if peer != nil {
-				log.Infof("Releasing client ip: %d", peer.Ip)
+				log.Infof("Releasing client ip: %v", peer.Ip)
 				msg := &protodef.FinAck{Header:req.(*protodef.Fin).Header}
 				err = srv.SendToClient(peer, session, msg)
 				if err != nil {
