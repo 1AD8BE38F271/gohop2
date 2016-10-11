@@ -1,5 +1,5 @@
 server-addr="45.76.196.181"
-local-dns="8.8.8.8"
+dns="108.61.10.10"
 cipher="salsa20"
 password="123456"
 addr="0.0.0.0"

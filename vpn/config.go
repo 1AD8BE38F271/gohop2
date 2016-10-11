@@ -32,7 +32,7 @@ type VPNConfig struct {
 	Cipher      string `toml:"cipher"`
 	Password    string `toml:"password"`
 	ServerAddr  string `toml:"server-addr"`
-	DNS         string `toml:"local-dns"`
+	DNS         string `toml:"dns"`
 	ListenAddr  string `toml:"addr"`
 	ServerPort  int    `toml:"server-port"`
 	Subnet      string `toml:"subnet"`

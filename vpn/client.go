@@ -74,6 +74,7 @@ func NewClient(cfg *VPNConfig) error {
 
 	serverAddr := fmt.Sprintf("%s:%d", cfg.ServerAddr, cfg.ServerPort)
 	fmt.Printf("Connecting to server %s ...\n", serverAddr)
+
 	session, err := Connect(
 		cfg.Protocol,
 		serverAddr,
@@ -106,16 +107,16 @@ func NewClient(cfg *VPNConfig) error {
 
 	err = hopClient.router.SetNewGateway(hopClient.iface.Name(), hopClient.iface.IP())
 	if err != nil {
-		return err
+		KillMyself()
+		return nil
 	}
 
 	if cfg.DNS != "" {
 		dnsl := []net.IP{net.ParseIP(cfg.DNS)}
 		err = hopClient.dnsManager.SetupNewDNS(dnsl)
 		if err != nil {
-			log.Error(err.Error())
-			pid := os.Getpid()
-			syscall.Kill(pid, syscall.SIGTERM)
+			log.Error(err)
+			KillMyself()
 			return nil
 		}
 
@@ -134,7 +135,7 @@ func (clt *CandyVPNClient) handleInterface() {
 			packet := <-clt.toIface
 			_, err := clt.iface.Write(packet)
 			if err != nil {
-				log.Error(err.Error())
+				log.Error(err)
 				return
 			}
 		}
@@ -144,7 +145,7 @@ func (clt *CandyVPNClient) handleInterface() {
 	for {
 		n, err := clt.iface.Read(frame)
 		if err != nil {
-			log.Error(err.Error())
+			log.Error(err)
 			return
 		}
 		buf := make([]byte, n)
@@ -152,7 +153,7 @@ func (clt *CandyVPNClient) handleInterface() {
 		dest := tcpip.IPv4Packet(buf).DestinationIP().To4()
 		log.Debugf("from iface packet: ip dest %v", dest)
 
-		clt.sendToServer(&protodef.Data{Header:&protodef.PacketHeader{Pid:clt.peer.Id, Seq:clt.peer.NextSeq()},Payload:buf}, nil)
+		clt.sendToServer(&protodef.Data{Header:&protodef.PacketHeader{Pid:clt.peer.Id, Seq:clt.peer.NextSeq()}, Payload:buf}, nil)
 	}
 }
 
@@ -191,12 +192,11 @@ func (clt *CandyVPNClient) handleConnection(session *link.Session) {
 	for {
 		rsp, err := session.Receive()
 		if err != nil {
-			log.Error(err.Error())
+			log.Error(err)
 			return
 		}
 
-		log.Debugf("receive a msg:%s", reflect.TypeOf(rsp))
-
+		log.Debugf("Receive a msg with type %s", reflect.TypeOf(rsp))
 
 		switch rsp.(type) {
 		case *protodef.Handshake:
@@ -212,8 +212,7 @@ func (clt *CandyVPNClient) handleConnection(session *link.Session) {
 				clt.toIface <- ipPacket
 			}
 		case *protodef.Fin:
-			pid := os.Getpid()
-			syscall.Kill(pid, syscall.SIGTERM)
+			KillMyself()
 
 		case *protodef.HandshakeAck:
 			if atomic.LoadInt32(&clt.peer.State) == HOP_STAT_HANDSHAKE {
@@ -222,8 +221,6 @@ func (clt *CandyVPNClient) handleConnection(session *link.Session) {
 				serverIp := make([]byte, 4)
 				binary.BigEndian.PutUint32(ip, rsp.(*protodef.HandshakeAck).Ip)
 				binary.BigEndian.PutUint32(serverIp, rsp.(*protodef.HandshakeAck).ServerIp)
-
-
 				makeSize := rsp.(*protodef.HandshakeAck).MarkSize
 				ipStr := fmt.Sprintf("%d.%d.%d.%d/%d", ip[0], ip[1], ip[2], ip[3], makeSize)
 				ip, subnet, _ := net.ParseCIDR(ipStr)
@@ -231,12 +228,13 @@ func (clt *CandyVPNClient) handleConnection(session *link.Session) {
 
 				err := clt.iface.SetupNetwork(ip, serverIp, *subnet, clt.cfg.MTU)
 				if err != nil {
-					panic(err)
+					log.Error(err)
+					KillMyself()
 				}
 
 				res := atomic.CompareAndSwapInt32(&clt.peer.State, HOP_STAT_HANDSHAKE, HOP_STAT_WORKING)
 				if !res {
-					log.Errorf("Client state not expected: %d", clt.peer.State)
+					log.Errorf("Client state is not HOP_STAT_HANDSHAKE: %d", clt.peer.State)
 				}
 				close(clt.peer.HandshakeDone)
 				clt.sendToServer(rsp.(*protodef.HandshakeAck), session)
@@ -251,19 +249,20 @@ func (clt *CandyVPNClient) handleConnection(session *link.Session) {
 			clt.finishAck <- struct{}{}
 
 		default:
-			log.Errorf("Message type %s that server dont support yet!\n", reflect.TypeOf(rsp))
+			log.Errorf("Message type is %s that server dont support yet!\n", reflect.TypeOf(rsp))
 		}
 	}
 }
 
 func (clt *CandyVPNClient) ping() {
+	log.Debug("send ping")
 	clt.sendToServer(&protodef.Ping{Header:&protodef.PacketHeader{Pid:clt.peer.Id, Seq:clt.peer.NextSeq()}}, nil)
 }
 
 func (clt *CandyVPNClient) handeshake() {
 	res := atomic.CompareAndSwapInt32(&clt.peer.State, HOP_STAT_INIT, HOP_STAT_HANDSHAKE)
 	if res {
-		log.Debug("send handhake..\n")
+		log.Debug("send handhake")
 		clt.sendToServer(&protodef.Handshake{Header:&protodef.PacketHeader{Pid:clt.peer.Id, Seq:clt.peer.NextSeq()}}, nil)
 	}
 }
@@ -283,7 +282,7 @@ func (clt *CandyVPNClient) sendToServer(msg proto.Message, session *link.Session
 		if session != nil {
 			err := session.Send(msg)
 			if err != nil {
-				log.Error(err.Error())
+				log.Error(err)
 				continue
 			}
 			return nil
@@ -298,8 +297,7 @@ func (clt *CandyVPNClient) cleanUp() {
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, syscall.SIGINT, syscall.SIGTERM, syscall.SIGKILL, syscall.SIGQUIT)
 	<-c
-
-	log.Info("Cleaning Up")
+	log.Info("Cleaning Up before exit...")
 
 	if clt.peer.State != HOP_STAT_INIT {
 		clt.finishSession()

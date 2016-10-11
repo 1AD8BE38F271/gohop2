@@ -68,7 +68,7 @@ type VPNPeersManager struct {
 	sessionLock    sync.RWMutex
 }
 
-func NewVPNPeers(subnet *net.IPNet, timeout time.Duration) (vs *VPNPeersManager) {
+func NewVPNPeersManager(subnet *net.IPNet, timeout time.Duration) (vs *VPNPeersManager) {
 	vs = new(VPNPeersManager)
 	vs.IpPool, _ = tcpip.NewIP4Pool(subnet)
 	vs.MyIp, _ = vs.IpPool.Next()

@@ -25,7 +25,6 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
-	"github.com/FTwOoO/vpncore/conn"
 	"github.com/FTwOoO/vpncore/tcpip"
 	"github.com/FTwOoO/vpncore/tuntap"
 	"github.com/FTwOoO/go-logger"
@@ -39,7 +38,7 @@ import (
 )
 
 const (
-	IFACE_BUFSIZE = 2000
+	IFACE_BUFSIZE = 2048
 	BUF_SIZE = 2048
 )
 
@@ -61,10 +60,8 @@ func NewServer(cfg *VPNConfig) (err error) {
 	}
 
 	hopServer := new(CandyVPNServer)
-
 	hopServer.fromIface = make(chan []byte, BUF_SIZE)
 	hopServer.toIface = make(chan []byte, BUF_SIZE * 4)
-	hopServer.peers = new(VPNPeersManager)
 	hopServer.cfg = cfg
 
 	iface, err := tuntap.NewTUN("tun1")
@@ -76,19 +73,26 @@ func NewServer(cfg *VPNConfig) (err error) {
 	ip, subnet, err := net.ParseCIDR(cfg.Subnet)
 	err = iface.SetupNetwork(ip, nil, *subnet, cfg.MTU)
 	if err != nil {
-		log.Error(err.Error())
+		log.Error(err)
 		return err
 	}
 
 	err = iface.ServerSetupNatRules()
 	if err != nil {
-		log.Error(err.Error())
+		log.Error(err)
 		return err
 	}
 
-	hopServer.peers = NewVPNPeers(subnet, time.Duration(hopServer.cfg.PeerTimeout) * time.Second)
+	hopServer.peers = NewVPNPeersManager(subnet, time.Duration(hopServer.cfg.PeerTimeout) * time.Second)
 
-	go hopServer.listen(cfg.Protocol, enc.Cipher(cfg.Cipher), cfg.Password, fmt.Sprintf("%s:%d", cfg.ListenAddr, cfg.ServerPort))
+	addr := fmt.Sprintf("%s:%d", cfg.ListenAddr, cfg.ServerPort)
+	hopServer.server, err = CreateServer(cfg.Protocol, addr, enc.Cipher(cfg.Cipher), cfg.Password, codec.NewProtobufProtocol(hopServer, allApplicationProtocols), 0x1000)
+	if err != nil {
+		log.Errorf("Failed to listen on %s: %v", addr, err)
+		KillMyself()
+	}
+	go hopServer.server.Serve(link.HandlerFunc(sessionLoop))
+
 	go hopServer.handleInterface()
 	go hopServer.forwardFrames()
 	go hopServer.peerTimeoutWatcher()
@@ -100,11 +104,9 @@ func NewServer(cfg *VPNConfig) (err error) {
 func (srv *CandyVPNServer) handleInterface() {
 	go func() {
 		for {
-			pbytes := <-srv.toIface
-
-			dest := tcpip.IPv4Packet(pbytes).DestinationIP().To4()
-			log.Debugf("to iface packet: ip dest %v", dest)
-			_, err := srv.iface.Write(pbytes)
+			packet := <-srv.toIface
+			LogIP4Packet(packet, "To iface packet")
+			_, err := srv.iface.Write(packet)
 			if err != nil {
 				return
 			}
@@ -115,12 +117,11 @@ func (srv *CandyVPNServer) handleInterface() {
 	for {
 		n, err := srv.iface.Read(buf)
 		if err != nil {
-			log.Error(err.Error())
+			log.Error(err)
 			return
 		}
 		hpbuf := make([]byte, n)
 		copy(hpbuf, buf)
-		log.Debug("New Net packet from device")
 		srv.fromIface <- hpbuf
 	}
 }
@@ -128,16 +129,16 @@ func (srv *CandyVPNServer) handleInterface() {
 func (srv *CandyVPNServer) forwardFrames() {
 	for {
 		select {
-		case pack := <-srv.fromIface:
-			if tcpip.IsIPv4(pack) {
-				dest := tcpip.IPv4Packet(pack).DestinationIP().To4()
-				log.Debugf("ip dest: %v", dest)
+		case packet := <-srv.fromIface:
+			if tcpip.IsIPv4(packet) {
+				dest := tcpip.IPv4Packet(packet).DestinationIP().To4()
+
 				peer := srv.peers.GetPeerByIp(dest)
 				if peer != nil {
-					log.Debugf("send packet to ip %v ...", dest)
+					LogIP4Packet(packet, "From iface packet")
 					msg := &protodef.Data{
 						Header:&protodef.PacketHeader{Pid:peer.Id, Seq:peer.NextSeq()},
-						Payload:pack,
+						Payload:packet,
 					}
 
 					err := srv.SendToClient(peer, nil, msg)
@@ -151,29 +152,18 @@ func (srv *CandyVPNServer) forwardFrames() {
 	}
 }
 
-func (srv *CandyVPNServer) listen(protocol conn.TransProtocol, cipher enc.Cipher, pass string, addr string) {
-	var err error
-	srv.server, err = CreateServer(protocol, addr, cipher, pass, codec.NewProtobufProtocol(srv, allApplicationProtocols), 0x1000)
-	if err != nil {
-		log.Errorf("Failed to listen on %s: %s", addr, err.Error())
-		os.Exit(0)
-	}
-
-	go srv.server.Serve(link.HandlerFunc(sessionLoop))
-}
-
 func sessionLoop(session *link.Session, ctx link.Context, _ error) {
-	log.Debugf("new session:%d", session.ID())
+	log.Debugf("New session:%d", session.ID())
 	srv := ctx.(*CandyVPNServer)
 
 	for {
 		req, err := session.Receive()
 		if err != nil {
-			log.Errorf("sesscion receive error: %v", err)
+			log.Errorf("Sesscion error on Receive(): %v", err)
 			return
 		}
 
-		log.Debugf("receive a msg:%s", reflect.TypeOf(req))
+		log.Debugf("Receive a msg with type %s", reflect.TypeOf(req))
 		sessionId := session.ID()
 		peer := srv.peers.GetPeerBySession(sessionId)
 		if peer != nil {
@@ -185,7 +175,8 @@ func sessionLoop(session *link.Session, ctx link.Context, _ error) {
 			if peer == nil {
 				reqmsg := req.(*protodef.Handshake)
 				if reqmsg.Header == nil {
-					panic("Header ????")
+					log.Errorf("Null header of handshake")
+					continue
 				}
 
 				Pid := reqmsg.Header.Pid
@@ -198,7 +189,7 @@ func sessionLoop(session *link.Session, ctx link.Context, _ error) {
 				srv.peers.AddSessionToPeer(peer, sessionId)
 			}
 
-			log.Debugf("assign address %s", peer.Ip)
+			log.Debugf("Assign address %s", peer.Ip)
 			atomic.StoreInt32(&peer.State, HOP_STAT_HANDSHAKE)
 
 			size, _ := srv.peers.IpPool.Subnet.Mask.Size()
@@ -210,6 +201,9 @@ func sessionLoop(session *link.Session, ctx link.Context, _ error) {
 				MarkSize:uint32(size),
 			}
 			err = srv.SendToClient(peer, session, msg)
+			if err != nil {
+				log.Error(err)
+			}
 
 			go func() {
 				select {
@@ -219,12 +213,14 @@ func sessionLoop(session *link.Session, ctx link.Context, _ error) {
 				case <-time.After(8 * time.Second):
 					msg := &protodef.Fin{Header:req.(*protodef.Handshake).Header}
 					err = srv.SendToClient(peer, session, msg)
+					if err != nil {
+						log.Error(err)
+					}
 					srv.peers.DeletePeer(peer)
 				}
 			}()
 		case *protodef.Ping:
 			if peer != nil && peer.State == HOP_STAT_WORKING {
-
 				msg := &protodef.PingAck{Header:req.(*protodef.Ping).Header}
 				err = srv.SendToClient(peer, session, msg)
 			}
@@ -237,12 +233,15 @@ func sessionLoop(session *link.Session, ctx link.Context, _ error) {
 				log.Infof("Releasing client ip: %d", peer.Ip)
 				msg := &protodef.FinAck{Header:req.(*protodef.Fin).Header}
 				err = srv.SendToClient(peer, session, msg)
+				if err != nil {
+					log.Error(err)
+				}
 				srv.peers.DeletePeer(peer)
 			}
 
 		case *protodef.HandshakeAck:
 			if peer != nil {
-				log.Infof("Client %d Connected", peer.Ip)
+				log.Infof("Client %d[ip %d] Connected", peer.Id, peer.Ip)
 				if ok := atomic.CompareAndSwapInt32(&peer.State, HOP_STAT_HANDSHAKE, HOP_STAT_WORKING); ok {
 					close(peer.HandshakeDone)
 				}
@@ -281,17 +280,20 @@ func (srv *CandyVPNServer) peerTimeoutWatcher() {
 		case <-time.After(timeout):
 			allPeers := srv.peers.GetAllPeers()
 			for _, peer := range allPeers {
-				log.Debugf("IP: %v", peer.Ip)
+				log.Debugf("Ping %v", peer.Ip)
 				msg := &protodef.Ping{
 					Header:&protodef.PacketHeader{Pid:peer.Id, Seq:peer.NextSeq()},
 				}
 				srv.SendToClient(peer, nil, msg)
 			}
 		case peer := <-srv.peers.PeerTimeout:
+			log.Infof("Peer %v timeout", peer.Ip)
 			msg := &protodef.Fin{
 				Header:&protodef.PacketHeader{Pid:peer.Id, Seq:peer.NextSeq()},
 			}
 			srv.SendToClient(peer, nil, msg)
+			srv.peers.DeletePeer(peer)
+
 		}
 	}
 }
@@ -312,7 +314,7 @@ func (srv *CandyVPNServer) SendToClient(peer *VPNPeer, session *link.Session, ms
 		if session != nil {
 			err := session.Send(msg)
 			if err != nil {
-				log.Error(err.Error())
+				log.Debug(err)
 				continue
 			}
 			return nil
