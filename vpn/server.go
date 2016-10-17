@@ -150,7 +150,7 @@ func (srv *CandyVPNServer) forwardFrames() {
 
 					err := srv.SendToClient(peer, nil, msg)
 					if err != nil {
-						log.Errorf("send packet to ip %v fail:%v!", dest, err)
+						log.Errorf("send packet to ip %v fail: %v\n", dest, err)
 					}
 				}
 			}
@@ -165,8 +165,9 @@ func (srv *CandyVPNServer) sessionLoop(session *link.Session) {
 	for {
 		req, err := session.Receive()
 		if err != nil {
-			log.Errorf("Sesscion error on Receive(): %v", err)
+			log.Errorf("Sesscion[%d] error on Receive(): %v", session.ID(), err)
 			session.Close()
+			srv.peers.DeleteSession(session.ID())
 			return
 		}
 

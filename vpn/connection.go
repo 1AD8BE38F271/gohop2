@@ -54,6 +54,6 @@ func CreateClient(tranProtocol conn.TransProtocol, address string, cipher enc.Ci
 		return conn.Dial([]conn.ConnLayerContext{context1, context2})
 	})
 
-	client := link.NewClient(dialer, codecProtocol, 0, 0, 0)
+	client := link.NewClient(dialer, codecProtocol, 2, 50, 0)
 	return client, nil
 }

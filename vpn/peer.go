@@ -55,7 +55,7 @@ func (peer *VPNPeer) Touch() {
 }
 
 type VPNPeersManager struct {
-	MyIp net.IP
+	MyIp           net.IP
 	IpPool         *tcpip.IP4Pool
 	PeerTimeout    chan *VPNPeer
 
@@ -64,7 +64,7 @@ type VPNPeersManager struct {
 	peerLock       sync.RWMutex
 
 	sessionToPeer  map[uint64]*VPNPeer
-	peerToSessions map[*VPNPeer][]uint64
+	peerToSessions map[*VPNPeer]map[uint64]bool
 	sessionLock    sync.RWMutex
 }
 
@@ -77,7 +77,7 @@ func NewVPNPeersManager(subnet *net.IPNet, timeout time.Duration) (vs *VPNPeersM
 	vs.peerByIp = map[string]*VPNPeer{}
 	vs.peerById = map[uint32]*VPNPeer{}
 	vs.sessionToPeer = map[uint64]*VPNPeer{}
-	vs.peerToSessions = map[*VPNPeer][]uint64{}
+	vs.peerToSessions = map[*VPNPeer]map[uint64]bool{}
 	vs.PeerTimeout = make(chan *VPNPeer, 100)
 
 	go vs.checkTimeout(timeout)
@@ -121,10 +121,26 @@ func (vs *VPNPeersManager) DeletePeer(peer *VPNPeer) {
 
 	vs.sessionLock.Lock()
 	defer vs.sessionLock.Unlock()
-	for _, sid := range vs.peerToSessions[peer] {
+	for sid, _ := range vs.peerToSessions[peer] {
 		delete(vs.sessionToPeer, sid)
 	}
 	delete(vs.peerToSessions, peer)
+}
+
+func (vs *VPNPeersManager) DeleteSession(sid uint64) {
+	vs.sessionLock.Lock()
+	defer vs.sessionLock.Unlock()
+
+	peer, found := vs.sessionToPeer[sid]
+	if found {
+		s, found := vs.peerToSessions[peer]
+		if found {
+			delete(s, sid)
+		}
+	}
+
+	delete(vs.sessionToPeer, sid)
+
 }
 
 func (vs *VPNPeersManager) AddSessionToPeer(peer *VPNPeer, sid uint64) {
@@ -132,13 +148,14 @@ func (vs *VPNPeersManager) AddSessionToPeer(peer *VPNPeer, sid uint64) {
 	defer vs.sessionLock.Unlock()
 
 	vs.sessionToPeer[sid] = peer
-	l, found := vs.peerToSessions[peer]
+	m, found := vs.peerToSessions[peer]
 	if !found {
-		vs.peerToSessions[peer] = []uint64{sid}
-	} else {
-
-		vs.peerToSessions[peer] = append(l, sid)
+		vs.peerToSessions[peer] = map[uint64]bool{}
+		m = vs.peerToSessions[peer]
 	}
+
+	m[sid] = true
+
 }
 
 func (vs *VPNPeersManager) GetPeerByIp(ip net.IP) (*VPNPeer) {
@@ -165,7 +182,12 @@ func (vs *VPNPeersManager) GetPeerBySession(sid uint64) (*VPNPeer) {
 func (vs *VPNPeersManager) GetPeerSessions(peer *VPNPeer) ([]uint64) {
 	vs.sessionLock.RLock()
 	defer vs.sessionLock.RUnlock()
-	return vs.peerToSessions[peer]
+
+	var sids []uint64
+	for sid, _ := range vs.peerToSessions[peer] {
+		sids = append(sids, sid)
+	}
+	return sids
 }
 
 func (vs *VPNPeersManager) GetAllPeers() ([]*VPNPeer) {
