@@ -41,16 +41,16 @@ import (
 )
 
 type CandyVPNClient struct {
-	cfg        *VPNConfig
-	iface      *tuntap.Interface
-	router     *routes.RoutesManager
-	dnsManager *dns.DNSManager
-	sessions   []*link.Session
+	client      *link.Client
+	cfg         *VPNConfig
+	iface       *tuntap.Interface
+	router      *routes.RoutesManager
+	dnsManager  *dns.DNSManager
 
-	peer       *VPNPeer
-	toIface    chan []byte
+	peer        *VPNPeer
+	toIface     chan []byte
 
-	finishAck  chan struct{} //清理时是主动发送FIN包，这个chan只是用来锁定是否收到的FIN的回应
+	finishAck   chan struct{} //清理时是主动发送FIN包，这个chan只是用来锁定是否收到的FIN的回应
 	waitCleanup chan struct{}
 }
 
@@ -62,33 +62,22 @@ func NewClient(cfg *VPNConfig) error {
 	hopClient.toIface = make(chan []byte, 128)
 	hopClient.router, _ = routes.NewRoutesManager()
 	hopClient.dnsManager = new(dns.DNSManager)
-	hopClient.sessions = []*link.Session{}
 
 	hopClient.cfg = cfg
 	hopClient.finishAck = make(chan struct{})
 	hopClient.waitCleanup = make(chan struct{})
 
+
+	// 1. Setup Tun interface
 	iface, err := tuntap.NewTUN("tun2")
 	if err != nil {
 		panic(err)
-	}
-	hopClient.iface = iface
-
-	serverAddr := fmt.Sprintf("%s:%d", cfg.ServerAddr, cfg.ServerPort)
-	fmt.Printf("Connecting to server %s ...\n", serverAddr)
-
-	session, err := Connect(
-		cfg.Protocol,
-		serverAddr,
-		enc.Cipher(cfg.Cipher),
-		cfg.Password,
-		codec.NewProtobufProtocol(hopClient, allApplicationProtocols),
-		0x100)
-
-	if err != nil {
-		panic(err)
+	} else {
+		hopClient.iface = iface
 	}
 
+
+	// 2. Add direct route for VPN
 	go hopClient.cleanUp()
 
 	hopClient.router.AddRouteToHost(
@@ -96,23 +85,32 @@ func NewClient(cfg *VPNConfig) error {
 		net.ParseIP(cfg.ServerAddr),
 		hopClient.router.DefaultGateway)
 
-	go hopClient.handleConnection(session)
-	hopClient.sessions = append(hopClient.sessions, session)
+	// 3. Setup the client to server connection
+	serverAddr := fmt.Sprintf("%s:%d", cfg.ServerAddr, cfg.ServerPort)
+	hopClient.client, err = CreateClient(
+		cfg.Protocol,
+		serverAddr,
+		enc.Cipher(cfg.Cipher),
+		cfg.Password,
+		codec.NewProtobufProtocol(allApplicationMessageTypes),
+	)
 
-	wait_handshake:
-	for {
-		select {
-		case <-hopClient.peer.HandshakeDone:
-			break wait_handshake
-		}
+	if err != nil {
+		panic(err)
 	}
 
+	// 4. Start handshake with server
+	go hopClient.client.Serve(link.HandlerFunc(hopClient.handleSession))
+	hopClient.startClient()
+
+	// 5. Setup the network for VPN interface to route all traffic though VPN
 	err = hopClient.router.SetNewGateway(hopClient.iface.Name(), hopClient.iface.IP())
 	if err != nil {
 		KillMyself()
 		return nil
 	}
 
+	// 6. Setup DNS
 	if cfg.DNS != "" {
 		dnsl := []net.IP{net.ParseIP(cfg.DNS)}
 		err = hopClient.dnsManager.SetupNewDNS(dnsl)
@@ -129,7 +127,7 @@ func NewClient(cfg *VPNConfig) error {
 
 	go hopClient.handleInterface()
 
-	<- hopClient.waitCleanup
+	<-hopClient.waitCleanup
 	return nil
 }
 
@@ -161,42 +159,44 @@ func (clt *CandyVPNClient) handleInterface() {
 	}
 }
 
-func (clt *CandyVPNClient) handleConnection(session *link.Session) {
-	log.Infof("Connected to server %d\n", session.ID())
+func (clt *CandyVPNClient) startClient() {
 
-	connectionDone := make(chan struct{}, 1)
-
-	go func(done  <- chan struct{}) {
-		for {
-			clt.handeshake()
-			select {
-			case <-clt.peer.HandshakeDone:
-				return
-			case <-time.After(5 * time.Second):
-				log.Debug("Handshake timeout, retry")
-			case <-done:
-				return
-			}
+	for {
+		clt.handeshake()
+		select {
+		case <-clt.peer.HandshakeDone:
+			return
+		case <-time.After(5 * time.Second):
+			log.Debug("Handshake timeout, retry")
+		case <-clt.waitCleanup:
+			return
 		}
-	}(connectionDone)
+	}
 
-	go func(done  <- chan struct{}) {
+	go func() {
 		for {
 			select {
 			case <-time.After((clt.cfg.PeerTimeout / 2) * time.Second):
 				if clt.peer.State == HOP_STAT_WORKING {
 					clt.ping()
+				} else if clt.peer.State == HOP_STAT_FIN {
+					return
 				}
-			case <-done:
+			case <-clt.waitCleanup:
 				return
 			}
 		}
-	}(connectionDone)
+	}()
+}
+
+func (clt *CandyVPNClient) handleSession(session *link.Session) {
+	log.Infof("Session[%d] connected to server \n", session.ID())
 
 	for {
 		rsp, err := session.Receive()
 		if err != nil {
 			log.Error(err)
+			session.Close()
 			return
 		}
 
@@ -250,7 +250,7 @@ func (clt *CandyVPNClient) handleConnection(session *link.Session) {
 		case *protodef.PingAck:
 		case *protodef.DataAck:
 		case *protodef.FinAck:
-			clt.finishAck <- struct{}{}
+			close(clt.finishAck)
 
 		default:
 			log.Errorf("Message type is %s that server dont support yet!\n", reflect.TypeOf(rsp))
@@ -282,19 +282,13 @@ func (clt *CandyVPNClient) sendToServer(msg proto.Message, session *link.Session
 		return session.Send(msg)
 	}
 
-	for _, session := range clt.sessions {
-		if session != nil {
-			err := session.Send(msg)
-			if err != nil {
-				log.Error(err)
-				continue
-			}
-			return nil
-		}
+	session, err := clt.client.GetSession()
+	if err != nil {
+		log.Error("Get session fail!")
+		return err
 	}
 
-	return fmt.Errorf("Send msg fail: %v", msg)
-
+	return session.Send(msg)
 }
 
 func (clt *CandyVPNClient) cleanUp() {
@@ -315,9 +309,7 @@ func (clt *CandyVPNClient) cleanUp() {
 		log.Info("Timeout, give up")
 	}
 
-	for _, s := range clt.sessions {
-		s.Close()
-	}
+	clt.client.Stop()
 
 	log.Info("Destroy iface")
 	clt.iface.Close()

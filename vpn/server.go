@@ -86,12 +86,19 @@ func NewServer(cfg *VPNConfig) (err error) {
 	hopServer.peers = NewVPNPeersManager(subnet, time.Duration(hopServer.cfg.PeerTimeout) * time.Second)
 
 	addr := fmt.Sprintf("%s:%d", cfg.ListenAddr, cfg.ServerPort)
-	hopServer.server, err = CreateServer(cfg.Protocol, addr, enc.Cipher(cfg.Cipher), cfg.Password, codec.NewProtobufProtocol(hopServer, allApplicationProtocols), 0x1000)
+	hopServer.server, err = CreateServer(
+		cfg.Protocol,
+		addr,
+		enc.Cipher(cfg.Cipher),
+		cfg.Password,
+		codec.NewProtobufProtocol(allApplicationMessageTypes),
+	)
+
 	if err != nil {
 		log.Errorf("Failed to listen on %s: %v", addr, err)
 		KillMyself()
 	}
-	go hopServer.server.Serve(link.HandlerFunc(sessionLoop))
+	go hopServer.server.Serve(link.HandlerFunc(hopServer.sessionLoop))
 
 	go hopServer.handleInterface()
 	go hopServer.forwardFrames()
@@ -152,14 +159,14 @@ func (srv *CandyVPNServer) forwardFrames() {
 	}
 }
 
-func sessionLoop(session *link.Session, ctx link.Context, _ error) {
+func (srv *CandyVPNServer) sessionLoop(session *link.Session) {
 	log.Debugf("New session:%d", session.ID())
-	srv := ctx.(*CandyVPNServer)
 
 	for {
 		req, err := session.Receive()
 		if err != nil {
 			log.Errorf("Sesscion error on Receive(): %v", err)
+			session.Close()
 			return
 		}
 

@@ -19,20 +19,22 @@ package vpn
 
 import (
 	"github.com/FTwOoO/go-logger"
+	"reflect"
+	"github.com/FTwOoO/gohop2/protodef"
 )
 
 var log *logger.Logger
 
-var allApplicationProtocols = []string{
-		"protodef.Ping",
-		"protodef.PingAck",
-		"protodef.Handshake",
-		"protodef.HandshakeAck",
-		"protodef.Fin",
-		"protodef.FinAck",
-		"protodef.Data",
-		"protodef.DataAck",
-	}
+var allApplicationMessageTypes = []reflect.Type{
+	reflect.TypeOf(new(protodef.Ping)),
+	reflect.TypeOf(new(protodef.PingAck)),
+	reflect.TypeOf(new(protodef.Handshake)),
+	reflect.TypeOf(new(protodef.HandshakeAck)),
+	reflect.TypeOf(new(protodef.Fin)),
+	reflect.TypeOf(new(protodef.FinAck)),
+	reflect.TypeOf(new(protodef.Data)),
+	reflect.TypeOf(new(protodef.DataAck)),
+}
 
 const (
 	HOP_STAT_INIT int32 = iota // initing
