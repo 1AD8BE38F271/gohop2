@@ -1,3 +1,5 @@
+waiting...
+
 # Related projects
 * [kone](https://github.com/xjdrew/kone): VPN though SOCKS/HTTP proxy.
 * [govpn](https://github.com/stargrave/govpn): Features strong encryption like chaff/window.
